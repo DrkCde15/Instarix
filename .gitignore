@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets and account session data
+.env
+session.json
