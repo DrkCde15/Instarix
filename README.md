@@ -28,6 +28,17 @@ O backend multi-tenant fica em `backend/` (FastAPI + PostgreSQL, credenciais
 cifradas e API keys). Setup, migrations, testes e rotas estão em
 [`backend/README.md`](backend/README.md).
 
+## Frontend
+
+O painel fica em `frontend/` (React + Vite) e consome a API v1. Setup, rotas e
+limitações estão em [`frontend/README.md`](frontend/README.md).
+
+```bash
+cd frontend
+npm install
+npm run dev   # http://localhost:5173 com proxy para :8000
+```
+
 ## Estrutura
 
 ```
