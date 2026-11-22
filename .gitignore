@@ -1,7 +1,11 @@
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Secrets and account session data
 .env
 session.json
+
+# Mídia baixada pelos jobs (storage local da fase 3)
+backend/media/
