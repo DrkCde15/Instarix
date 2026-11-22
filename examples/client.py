@@ -9,3 +9,6 @@ print(f"Conectado como user_id={cl.user_id}")
 
 # Com proxy (opcional):
 # cl = get_client(proxy="http://usuario:senha@host:porta")
+
+# Conta com 2FA (código de uso único):
+# cl = get_client(verification_code="123456")

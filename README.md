@@ -22,6 +22,12 @@ Na primeira execução o script faz login e salva a sessão em `session.json`.
 As execuções seguintes reutilizam a sessão; o `login()` só autentica de novo
 se ela não for mais válida.
 
+## Backend
+
+O backend multi-tenant fica em `backend/` (FastAPI + PostgreSQL, credenciais
+cifradas e API keys). Setup, migrations, testes e rotas estão em
+[`backend/README.md`](backend/README.md).
+
 ## Estrutura
 
 ```
@@ -54,6 +60,11 @@ download.baixar_midia(cl, "MEDIA_PK", pasta="downloads")
 
 `get_client()` lê `IG_USERNAME` / `IG_PASSWORD` do `.env`, reutiliza
 `session.json` e aplica um atraso entre requisições (`delay_range = [1, 3]`).
+Em contas com 2FA, informe o código no login:
+
+```python
+cl = get_client(verification_code="123456")
+```
 
 Convenções usadas na documentação abaixo:
 
@@ -69,7 +80,7 @@ Convenções usadas na documentação abaixo:
 
 | Função | Descrição |
 |---|---|
-| `get_client(username=None, password=None, session_file=None, proxy=None)` | Cria um `Client` logado, reutilizando a sessão salva quando válida. Sem argumentos, lê as credenciais do `.env`. |
+| `get_client(username=None, password=None, session_file=None, proxy=None, verification_code=None)` | Cria um `Client` logado, reutilizando a sessão salva quando válida. Sem argumentos, lê as credenciais do `.env`. Contas com 2FA passam `verification_code="123456"` (ou definem `IG_VERIFICATION_CODE`). |
 
 ### funcs.download
 
