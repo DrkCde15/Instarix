@@ -3,7 +3,16 @@
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "owner": frozenset({"*"}),
     "admin": frozenset(
-        {"accounts:read", "accounts:write", "jobs:read", "jobs:write", "keys:manage"}
+        {
+            "accounts:read",
+            "accounts:write",
+            "jobs:read",
+            "jobs:write",
+            "keys:manage",
+            "webhooks:read",
+            "webhooks:write",
+            "audit:read",
+        }
     ),
     "operator": frozenset(
         {"accounts:read", "accounts:2fa", "jobs:read", "jobs:write"}
@@ -19,6 +28,9 @@ ALLOWED_SCOPES: frozenset[str] = frozenset(
         "jobs:read",
         "jobs:write",
         "keys:manage",
+        "webhooks:read",
+        "webhooks:write",
+        "audit:read",
     }
 )
 

@@ -36,6 +36,11 @@ from app.jobs.handlers import HANDLERS, JobContext, JobError
 from app.jobs.payloads import JOB_PAYLOAD_MODELS
 from app.services.ig_gateway import IgGateway, get_ig_gateway
 from app.services.storage import MediaStorage, build_media_storage
+from app.services.webhooks import (
+    HttpWebhookNotifier,
+    WebhookNotifier,
+    WebhookService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +54,7 @@ class JobWorker:
         storage: MediaStorage,
         settings: Settings,
         worker_id: str,
+        webhook_notifier: WebhookNotifier | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.cipher = cipher
@@ -56,6 +62,7 @@ class JobWorker:
         self.storage = storage
         self.settings = settings
         self.worker_id = worker_id
+        self.webhook_notifier = webhook_notifier or HttpWebhookNotifier()
 
     def claim(self) -> Job | None:
         now = utcnow()
@@ -199,6 +206,7 @@ class JobWorker:
                 job.locked_by = None
                 job.locked_at = None
                 job.finished_at = utcnow()
+                self._enqueue_job_event(db, job, "job.succeeded")
                 db.commit()
                 logger.info(
                     "job_succeeded job_id=%s type=%s account_id=%s",
@@ -246,6 +254,7 @@ class JobWorker:
         else:
             job.status = JobStatus.FAILED
             job.finished_at = now
+            self._enqueue_job_event(db, job, "job.failed")
             logger.warning(
                 "job_failed job_id=%s type=%s code=%s attempt=%s/%s",
                 job.id,
@@ -255,6 +264,28 @@ class JobWorker:
                 job.max_attempts,
             )
         db.commit()
+
+    def _enqueue_job_event(self, db: Session, job: Job, event: str) -> None:
+        payload = {
+            "job_id": str(job.id),
+            "account_id": str(job.account_id) if job.account_id else None,
+            "type": job.type,
+            "status": job.status,
+            "error_code": job.error_code,
+        }
+        try:
+            with db.begin_nested():
+                WebhookService(db, self.cipher, self.settings).enqueue_event(
+                    job.tenant_id, event, payload
+                )
+        except Exception:  # noqa: BLE001 - webhook não pode derrubar o job
+            logger.exception("webhook_enqueue_failed job_id=%s event=%s", job.id, event)
+
+    def deliver_webhooks(self, limit: int = 20) -> int:
+        with self.session_factory() as db:
+            return WebhookService(db, self.cipher, self.settings).deliver_due(
+                self.webhook_notifier, limit=limit
+            )
 
     def sweep(self) -> int:
         """Recupera jobs running cujo worker morreu (lock antigo)."""
@@ -313,6 +344,7 @@ class JobWorker:
         while not stop.is_set():
             try:
                 self.sweep()
+                self.deliver_webhooks()
                 processed = self.run_available(limit=50, stop=stop)
                 if processed == 0:
                     stop.wait(self.settings.job_poll_interval_seconds)
@@ -362,7 +394,13 @@ def main(argv: list[str] | None = None) -> int:
         worker = _build_worker(0, settings, cipher, gateway)
         swept = worker.sweep()
         processed = worker.run_available(limit=1000)
-        logger.info("worker_once_finished swept=%s processed=%s", swept, processed)
+        delivered = worker.deliver_webhooks(limit=1000)
+        logger.info(
+            "worker_once_finished swept=%s processed=%s delivered=%s",
+            swept,
+            processed,
+            delivered,
+        )
         return 0
 
     threads = args.threads or settings.job_worker_threads

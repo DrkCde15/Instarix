@@ -8,6 +8,7 @@ from app.services.ig_gateway import (
     DownloadedMedia,
     HealthOutcome,
     LoginOutcome,
+    PublishedMedia,
 )
 
 
@@ -40,6 +41,10 @@ class FakeIgGateway:
     media_list_calls: list[dict[str, Any]] = field(default_factory=list)
     download_calls: list[dict[str, Any]] = field(default_factory=list)
     insights_calls: list[dict[str, Any]] = field(default_factory=list)
+    publish_calls: list[dict[str, Any]] = field(default_factory=list)
+    publish_error: Exception | None = None
+    published_media_pk: str = "555000111"
+    published_code: str = "POST123"
 
     def __post_init__(self) -> None:
         if self.login_outcome is None:
@@ -83,3 +88,24 @@ class FakeIgGateway:
         if self.insights_error is not None:
             raise self.insights_error
         return dict(self.insights_data)
+
+    def _publish(self, action: str, **kwargs: Any) -> PublishedMedia:
+        self.publish_calls.append({"action": action, **kwargs})
+        if self.publish_error is not None:
+            raise self.publish_error
+        return PublishedMedia(self.published_media_pk, self.published_code)
+
+    def publish_photo(self, **kwargs: Any) -> PublishedMedia:
+        return self._publish("photo", **kwargs)
+
+    def publish_video(self, **kwargs: Any) -> PublishedMedia:
+        return self._publish("video", **kwargs)
+
+    def publish_reel(self, **kwargs: Any) -> PublishedMedia:
+        return self._publish("reel", **kwargs)
+
+    def publish_album(self, **kwargs: Any) -> PublishedMedia:
+        return self._publish("album", **kwargs)
+
+    def publish_story(self, **kwargs: Any) -> PublishedMedia:
+        return self._publish("story", **kwargs)

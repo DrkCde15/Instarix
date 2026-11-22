@@ -30,6 +30,8 @@ from app.services.jobs import JobService
 from app.services.login import LoginService
 from app.services.read import ReadService
 from app.services.storage import MediaStorage, get_media_storage
+from app.services.uploads import UploadService
+from app.services.webhooks import WebhookService
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -148,3 +150,18 @@ def get_read_service(
     storage: MediaStorage = Depends(get_media_storage),
 ) -> ReadService:
     return ReadService(db, storage)
+
+
+def get_upload_service(
+    storage: MediaStorage = Depends(get_media_storage),
+    settings: Settings = Depends(get_settings),
+) -> UploadService:
+    return UploadService(storage, settings)
+
+
+def get_webhook_service(
+    db: Session = Depends(get_db),
+    cipher: Cipher = Depends(get_cipher),
+    settings: Settings = Depends(get_settings),
+) -> WebhookService:
+    return WebhookService(db, cipher, settings)

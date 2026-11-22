@@ -1,9 +1,10 @@
-# Instarix API — Fases 1, 2 e 3
+# Instarix API — Fases 1 a 4
 
 Backend multi-tenant do Instarix: FastAPI + PostgreSQL + SQLAlchemy/Alembic, com
-credenciais do Instagram cifradas em repouso. As fases 1–3 entregam auth,
-tenants, contas, API keys, login real por conta, 2FA, sessão, health check e uma
-fila de jobs serializada por conta, com operações de leitura/download cacheadas.
+credenciais do Instagram cifradas em repouso. As fases 1–4 entregam auth,
+tenants, contas, API keys, login real por conta, 2FA, sessão, health check, fila
+de jobs serializada por conta, leituras cacheadas, upload/publicação, webhooks
+com HMAC/retry e audit log.
 
 ## Stack
 
@@ -15,7 +16,8 @@ fila de jobs serializada por conta, com operações de leitura/download cacheada
 - instagrapi para gerar o `device_settings` e executar login/health/logout
 - Fila no PostgreSQL (`jobs` + `FOR UPDATE SKIP LOCKED`) processada por um
   worker próprio, sem Redis/arq nesta fase
-- Storage local para a mídia baixada (S3 fica para a fase 4)
+- Storage local para mídia baixada e uploads (S3/MinIO fica para depois)
+- Webhooks de saída com HMAC-SHA256 e retry exponencial
 
 ## Rodando localmente
 
@@ -60,9 +62,10 @@ Os testes usam SQLite temporário e sobrescrevem `get_db`, `get_device_provider`
 Cobrem cripto e rotação de chaves, registro/login/refresh com detecção de reuso,
 CRUD de contas, paginação por cursor, RBAC, API keys, isolamento entre tenants,
 login (sucesso, 2FA, código errado, expiração, challenge, senha inválida, sessão
-inválida e falha transitória) e a fase 3: criação/idempotência/cancelamento de
+inválida e falha transitória), a fase 3 (criação/idempotência/cancelamento de
 jobs, serialização por conta, retry/backoff, recuperação pelo sweeper, cache de
-mídia/insights e download de assets.
+mídia/insights e download de assets) e a fase 4 (upload, publicação, proteção
+contra post ambíguo, webhooks com HMAC/retry e audit log).
 
 ## Variáveis de ambiente
 
@@ -85,7 +88,11 @@ mídia/insights e download de assets.
 | `JOB_POLL_INTERVAL_SECONDS` | não | intervalo de polling quando a fila está vazia (padrão 2) |
 | `JOB_LOCK_TIMEOUT_SECONDS` | não | tempo até o sweeper considerar um job órfão (padrão 600) |
 | `JOB_BACKOFF_BASE_SECONDS` | não | base do backoff exponencial com jitter (padrão 5) |
-| `MEDIA_STORAGE_DIR` | não | diretório local dos downloads (padrão `backend/media`) |
+| `MEDIA_STORAGE_DIR` | não | diretório local dos downloads/uploads (padrão `backend/media`) |
+| `UPLOAD_MAX_BYTES` | não | tamanho máximo de upload (padrão 25 MiB) |
+| `WEBHOOK_TIMEOUT_SECONDS` | não | timeout de cada entrega de webhook (padrão 5 s) |
+| `WEBHOOK_MAX_ATTEMPTS` | não | tentativas por entrega (padrão 5) |
+| `WEBHOOK_BACKOFF_BASE_SECONDS` | não | base do backoff dos webhooks (padrão 10 s) |
 | `REDIS_URL` | não | reservado; a fila atual usa apenas o PostgreSQL |
 
 ## API (v1)
@@ -111,6 +118,11 @@ mídia/insights e download de assets.
 | GET | `/v1/media/{asset_id}` | `accounts:read` |
 | POST | `/v1/accounts/{id}/insights/sync` | `jobs:write` |
 | GET | `/v1/accounts/{id}/insights` | `accounts:read` |
+| POST | `/v1/uploads` | `jobs:write` (multipart) |
+| GET/POST | `/v1/webhooks` | `webhooks:read` / `webhooks:write` |
+| DELETE | `/v1/webhooks/{id}` | `webhooks:write` |
+| GET | `/v1/webhooks/{id}/deliveries` | `webhooks:read` |
+| GET | `/v1/audit-logs` | `audit:read` |
 | GET/POST | `/v1/api-keys` | `keys:manage` |
 | DELETE | `/v1/api-keys/{id}` | `keys:manage` |
 | GET | `/healthz`, `/readyz` | públicas |
@@ -192,6 +204,45 @@ python -m app.workers.worker --once     # sweeper + processa a fila atual
   logs ou mensagens de erro. Falhas são gravadas como código/mensagem
   sanitizados.
 
+## Uploads, publicação e webhooks
+
+Sem S3/MinIO nesta fase, o upload é multipart direto na API e grava no mesmo
+volume local usado pelo worker:
+
+```bash
+curl -F file=@foto.jpg -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/v1/uploads
+# {"storage_key":"uploads/.../abc.jpg","content_type":"image/jpeg",...}
+```
+
+O `storage_key` retornado vai no payload de `publish.photo`, `publish.video`,
+`publish.reel`, `publish.album` ou `publish.story`. Limites: 25 MiB,
+JPEG/PNG/WebP para foto e MP4/MOV para vídeo. Thumbnail é opcional para vídeo e
+reel. O job roda no worker com a sessão da conta.
+
+Proteção contra post ambíguo: antes de chamar o Instagram o job grava
+`result.publish_state = "sending"`. Se a chamada falhar ou o worker morrer, o
+job fica `failed` com `ambiguous_publish` e **não** repete sozinho; o cliente
+confere a conta antes de reenfileirar. Um replay com a mesma `idempotency_key`
+devolve o job existente e não publica de novo.
+
+Webhooks:
+
+- `POST /v1/webhooks` recebe `{url, events}` (`job.succeeded`, `job.failed`) e
+  devolve o segredo **uma única vez**. Ele fica cifrado no banco.
+- Cada entrega é um POST JSON com `X-Instarix-Event`, `X-Instarix-Delivery`,
+  `X-Instarix-Timestamp` e `X-Instarix-Signature: sha256=<hmac>`; o HMAC cobre
+  `timestamp.body`, no mesmo formato de Stripe.
+- Falhas de rede/HTTP são repetidas com backoff exponencial até
+  `WEBHOOK_MAX_ATTEMPTS`; o histórico fica em
+  `GET /v1/webhooks/{id}/deliveries`.
+- O worker entrega webhooks pendentes no mesmo loop (e no `--once`).
+
+Ações sensíveis geram `audit_logs` sem segredos: criação/atualização/exclusão de
+conta, login/2FA/logout, criação/revogação de API key, criação de job e
+gestão de webhook. `GET /v1/audit-logs` permite filtrar por `action`,
+`account_id` e paginar por cursor.
+
 ## Segurança
 
 - Senhas de usuário: Argon2id.
@@ -246,6 +297,15 @@ python -m app.workers.worker --once     # sweeper + processa a fila atual
   expiração/retenção. Em várias instâncias, o volume precisa ser compartilhado
   (ou trocado para object storage).
 - Não há quota de jobs nem limite de armazenamento por tenant nesta fase.
+- Uploads são multipart direto na API, sem URL pré-assinada; o arquivo precisa
+  estar no volume compartilhado entre API e worker. A validação de conteúdo é
+  por `Content-Type`/extensão, não por inspeção profunda do arquivo.
+- A entrega de webhooks é síncrona dentro do loop do worker e usa `urllib`.
+  Não há fila dedicada, dead-letter queue nem reentrega manual; endpoints
+  privados são bloqueados por validação literal de IP/host, mas DNS rebinding
+  não está coberto.
+- Publicações não têm agendamento (`schedule_at`) nem reconciliação automática
+  de post ambíguo; o cliente precisa confirmar na conta.
 
 - `alembic check` no SQLite avisa que índices de expressão
   (`lower(email)`, `lower(username)`) não são refletidos; são criados
@@ -259,5 +319,7 @@ python -m app.workers.worker --once     # sweeper + processa a fila atual
 
 ## Próximas fases
 
-4. Publicação, uploads, webhooks, S3 e audit log.
-5. Quotas, métricas, rotação de chaves e RLS.
+5. Endurecimento: quotas, rate limit por chave, métricas, rotação de chaves,
+   RLS, runbooks e teste de carga.
+6. S3/MinIO com uploads pré-assinados, agendamento de publicação e
+   reconciliação de post ambíguo.

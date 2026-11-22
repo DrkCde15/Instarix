@@ -1,10 +1,14 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
+from sqlalchemy.orm import Session
 
 from app.api.deps import Principal, get_job_service, require
 from app.api.pagination import decode_cursor, encode_cursor
+from app.api.request_info import client_ip
+from app.db.session import get_db
 from app.schemas.job import JobCreate, JobOut, JobPage
+from app.services.audit import record_audit
 from app.services.jobs import JobService
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -20,12 +24,24 @@ def create_job(
     account_id: UUID,
     payload: JobCreate,
     response: Response,
+    request: Request,
     principal: Principal = Depends(require("jobs:write")),
     service: JobService = Depends(get_job_service),
+    db: Session = Depends(get_db),
 ) -> JobOut:
     result = service.create(
         principal.tenant_id, account_id, payload, principal.user_id
     )
+    if result.created:
+        record_audit(
+            db,
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            action="job.created",
+            account_id=account_id,
+            event_data={"job_id": str(result.job.id), "type": result.job.type},
+            ip=client_ip(request),
+        )
     response.status_code = (
         status.HTTP_202_ACCEPTED if result.created else status.HTTP_200_OK
     )

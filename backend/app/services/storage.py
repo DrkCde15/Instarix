@@ -27,6 +27,8 @@ def content_type_for(path: Path) -> str:
 class MediaStorage(Protocol):
     def save(self, source: Path, key: str) -> int: ...
 
+    def save_bytes(self, data: bytes, key: str) -> int: ...
+
     def path(self, key: str) -> Path: ...
 
 
@@ -46,6 +48,12 @@ class LocalMediaStorage:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(source), str(destination))
         return destination.stat().st_size
+
+    def save_bytes(self, data: bytes, key: str) -> int:
+        destination = self._safe_path(key)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
+        return len(data)
 
     def path(self, key: str) -> Path:
         return self._safe_path(key)

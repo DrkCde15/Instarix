@@ -23,6 +23,11 @@ from app.jobs.payloads import (
     InsightsAccountPayload,
     MediaDownloadPayload,
     MediaListPayload,
+    PublishAlbumPayload,
+    PublishPhotoPayload,
+    PublishReelPayload,
+    PublishStoryPayload,
+    PublishVideoPayload,
 )
 from app.services.ig_gateway import IgGateway, IgGatewayError
 from app.services.storage import MediaStorage, content_type_for
@@ -202,6 +207,159 @@ def _jsonable(value: Any) -> Any:
     return json.loads(json.dumps(value, default=str))
 
 
+def _upload_path(ctx: JobContext, key: str) -> Path:
+    try:
+        path = ctx.storage.path(key)
+    except ValueError:
+        raise JobError("upload_not_found", "Arquivo de upload não encontrado.") from None
+    if not path.is_file():
+        raise JobError("upload_not_found", "Arquivo de upload não encontrado.")
+    return path
+
+
+def _require_media_type(path: Path, kind: str) -> None:
+    content_type = content_type_for(path)
+    expected = "image/" if kind == "photo" else "video/"
+    if not content_type.startswith(expected):
+        raise JobError(
+            "invalid_upload_type",
+            f"O arquivo de {kind} tem tipo incompatível ({content_type}).",
+        )
+
+
+def _publish(
+    ctx: JobContext, call: Callable[[], Any], *, media_pk_hint: str = ""
+) -> dict[str, Any]:
+    # Se uma tentativa anterior chegou a enviar, nunca reenvia sozinha: o
+    # cliente precisa conferir a conta. Isso evita post duplicado.
+    if (ctx.job.result or {}).get("publish_state") == "sending":
+        raise JobError(
+            "ambiguous_publish",
+            "A publicação anterior pode ter sido enviada; confira a conta antes de repetir.",
+        )
+
+    ctx.job.result = {
+        "publish_state": "sending",
+        "started_at": utcnow().isoformat(),
+        "media_pk_hint": media_pk_hint,
+    }
+    ctx.db.commit()
+    try:
+        published = call()
+    except Exception as exc:  # noqa: BLE001 - após o envio não há como confirmar
+        logger.warning(
+            "job_publish_ambiguous job_id=%s error=%s",
+            ctx.job.id,
+            type(exc).__name__,
+        )
+        raise JobError(
+            "ambiguous_publish",
+            "Não foi possível confirmar a publicação; confira a conta antes de repetir.",
+        ) from exc
+
+    return {
+        "publish_state": "succeeded",
+        "media_pk": published.media_pk,
+        "code": published.code,
+        "published_at": utcnow().isoformat(),
+    }
+
+
+def handle_publish_photo(ctx: JobContext) -> dict[str, Any]:
+    payload = PublishPhotoPayload.model_validate(ctx.job.payload)
+    session, proxy = _session(ctx)
+    path = _upload_path(ctx, payload.storage_key)
+    _require_media_type(path, "photo")
+    return _publish(
+        ctx,
+        lambda: ctx.gateway.publish_photo(
+            path=path,
+            caption=payload.caption,
+            proxy=proxy,
+            session=session,
+        ),
+    )
+
+
+def handle_publish_video(ctx: JobContext) -> dict[str, Any]:
+    payload = PublishVideoPayload.model_validate(ctx.job.payload)
+    session, proxy = _session(ctx)
+    path = _upload_path(ctx, payload.storage_key)
+    _require_media_type(path, "video")
+    thumbnail = (
+        _upload_path(ctx, payload.thumbnail_key) if payload.thumbnail_key else None
+    )
+    if thumbnail is not None:
+        _require_media_type(thumbnail, "photo")
+    return _publish(
+        ctx,
+        lambda: ctx.gateway.publish_video(
+            path=path,
+            caption=payload.caption,
+            thumbnail=thumbnail,
+            proxy=proxy,
+            session=session,
+        ),
+    )
+
+
+def handle_publish_reel(ctx: JobContext) -> dict[str, Any]:
+    payload = PublishReelPayload.model_validate(ctx.job.payload)
+    session, proxy = _session(ctx)
+    path = _upload_path(ctx, payload.storage_key)
+    _require_media_type(path, "video")
+    thumbnail = (
+        _upload_path(ctx, payload.thumbnail_key) if payload.thumbnail_key else None
+    )
+    if thumbnail is not None:
+        _require_media_type(thumbnail, "photo")
+    return _publish(
+        ctx,
+        lambda: ctx.gateway.publish_reel(
+            path=path,
+            caption=payload.caption,
+            thumbnail=thumbnail,
+            proxy=proxy,
+            session=session,
+        ),
+    )
+
+
+def handle_publish_album(ctx: JobContext) -> dict[str, Any]:
+    payload = PublishAlbumPayload.model_validate(ctx.job.payload)
+    session, proxy = _session(ctx)
+    paths = [_upload_path(ctx, key) for key in payload.storage_keys]
+    for path in paths:
+        suffix = path.suffix.lower()
+        _require_media_type(path, "video" if suffix in {".mp4", ".mov"} else "photo")
+    return _publish(
+        ctx,
+        lambda: ctx.gateway.publish_album(
+            paths=paths,
+            caption=payload.caption,
+            proxy=proxy,
+            session=session,
+        ),
+    )
+
+
+def handle_publish_story(ctx: JobContext) -> dict[str, Any]:
+    payload = PublishStoryPayload.model_validate(ctx.job.payload)
+    session, proxy = _session(ctx)
+    path = _upload_path(ctx, payload.storage_key)
+    _require_media_type(path, payload.kind)
+    return _publish(
+        ctx,
+        lambda: ctx.gateway.publish_story(
+            path=path,
+            kind=payload.kind,
+            caption=payload.caption,
+            proxy=proxy,
+            session=session,
+        ),
+    )
+
+
 def handle_insights_account(ctx: JobContext) -> dict[str, Any]:
     InsightsAccountPayload.model_validate(ctx.job.payload)
     session, proxy = _session(ctx)
@@ -254,4 +412,9 @@ HANDLERS: dict[str, Callable[[JobContext], dict[str, Any]]] = {
     "media.download": handle_media_download,
     "insights.account": handle_insights_account,
     "account.health": handle_account_health,
+    "publish.photo": handle_publish_photo,
+    "publish.video": handle_publish_video,
+    "publish.reel": handle_publish_reel,
+    "publish.album": handle_publish_album,
+    "publish.story": handle_publish_story,
 }

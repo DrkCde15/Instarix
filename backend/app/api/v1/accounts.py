@@ -1,6 +1,7 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
+from sqlalchemy.orm import Session
 
 from app.api.deps import (
     Principal,
@@ -9,6 +10,8 @@ from app.api.deps import (
     require,
 )
 from app.api.pagination import decode_cursor, encode_cursor
+from app.api.request_info import client_ip
+from app.db.session import get_db
 from app.schemas.account import (
     AccountCreate,
     AccountOut,
@@ -18,6 +21,7 @@ from app.schemas.account import (
     TwoFactorIn,
 )
 from app.services.accounts import AccountService
+from app.services.audit import record_audit
 from app.services.login import LoginService
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
@@ -49,10 +53,21 @@ def list_accounts(
 @router.post("", response_model=AccountOut, status_code=status.HTTP_201_CREATED)
 def create_account(
     payload: AccountCreate,
+    request: Request,
     principal: Principal = Depends(require("accounts:write")),
     service: AccountService = Depends(get_account_service),
+    db: Session = Depends(get_db),
 ) -> AccountOut:
     account = service.create(principal.tenant_id, payload)
+    record_audit(
+        db,
+        tenant_id=principal.tenant_id,
+        user_id=principal.user_id,
+        action="account.created",
+        account_id=account.id,
+        event_data={"username": account.username},
+        ip=client_ip(request),
+    )
     return AccountOut.model_validate(account)
 
 
@@ -69,52 +84,105 @@ def get_account(
 def update_account(
     account_id: UUID,
     payload: AccountUpdate,
+    request: Request,
     principal: Principal = Depends(require("accounts:write")),
     service: AccountService = Depends(get_account_service),
+    db: Session = Depends(get_db),
 ) -> AccountOut:
-    return AccountOut.model_validate(
-        service.update(principal.tenant_id, account_id, payload)
+    account = service.update(principal.tenant_id, account_id, payload)
+    changed = sorted(payload.model_fields_set)
+    record_audit(
+        db,
+        tenant_id=principal.tenant_id,
+        user_id=principal.user_id,
+        action="account.updated",
+        account_id=account.id,
+        event_data={"changed_fields": changed},
+        ip=client_ip(request),
     )
+    return AccountOut.model_validate(account)
 
 
 @router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_account(
     account_id: UUID,
+    request: Request,
     principal: Principal = Depends(require("accounts:write")),
     service: AccountService = Depends(get_account_service),
+    db: Session = Depends(get_db),
 ) -> Response:
     service.soft_delete(principal.tenant_id, account_id)
+    record_audit(
+        db,
+        tenant_id=principal.tenant_id,
+        user_id=principal.user_id,
+        action="account.deleted",
+        account_id=account_id,
+        ip=client_ip(request),
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/{account_id}/login", response_model=AccountOut)
 def login_account(
     account_id: UUID,
+    request: Request,
     principal: Principal = Depends(require("accounts:write")),
     service: LoginService = Depends(get_login_service),
+    db: Session = Depends(get_db),
 ) -> AccountOut:
-    return AccountOut.model_validate(service.login(principal.tenant_id, account_id))
+    account = service.login(principal.tenant_id, account_id)
+    record_audit(
+        db,
+        tenant_id=principal.tenant_id,
+        user_id=principal.user_id,
+        action="account.login",
+        account_id=account.id,
+        event_data={"status": account.status},
+        ip=client_ip(request),
+    )
+    return AccountOut.model_validate(account)
 
 
 @router.post("/{account_id}/2fa", response_model=AccountOut)
 def submit_two_factor(
     account_id: UUID,
     payload: TwoFactorIn,
+    request: Request,
     principal: Principal = Depends(require("accounts:2fa")),
     service: LoginService = Depends(get_login_service),
+    db: Session = Depends(get_db),
 ) -> AccountOut:
-    return AccountOut.model_validate(
-        service.submit_2fa(principal.tenant_id, account_id, payload.code)
+    account = service.submit_2fa(principal.tenant_id, account_id, payload.code)
+    record_audit(
+        db,
+        tenant_id=principal.tenant_id,
+        user_id=principal.user_id,
+        action="account.2fa",
+        account_id=account.id,
+        event_data={"status": account.status},
+        ip=client_ip(request),
     )
+    return AccountOut.model_validate(account)
 
 
 @router.post("/{account_id}/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout_account(
     account_id: UUID,
+    request: Request,
     principal: Principal = Depends(require("accounts:write")),
     service: LoginService = Depends(get_login_service),
+    db: Session = Depends(get_db),
 ) -> Response:
     service.logout(principal.tenant_id, account_id)
+    record_audit(
+        db,
+        tenant_id=principal.tenant_id,
+        user_id=principal.user_id,
+        action="account.logout",
+        account_id=account_id,
+        ip=client_ip(request),
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

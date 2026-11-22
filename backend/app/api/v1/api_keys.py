@@ -1,16 +1,18 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import Principal, require
+from app.api.request_info import client_ip
 from app.core.errors import forbidden, not_found
 from app.core.security import generate_api_key
 from app.core.time import utcnow
 from app.db.models import ApiKey
 from app.db.session import get_db
 from app.schemas.api_key import ApiKeyCreate, ApiKeyCreated, ApiKeyOut
+from app.services.audit import record_audit
 
 router = APIRouter(prefix="/api-keys", tags=["api-keys"])
 
@@ -31,6 +33,7 @@ def list_api_keys(
 @router.post("", response_model=ApiKeyCreated, status_code=status.HTTP_201_CREATED)
 def create_api_key(
     payload: ApiKeyCreate,
+    request: Request,
     principal: Principal = Depends(require("keys:manage")),
     db: Session = Depends(get_db),
 ) -> ApiKeyCreated:
@@ -52,6 +55,14 @@ def create_api_key(
     )
     db.add(api_key)
     db.commit()
+    record_audit(
+        db,
+        tenant_id=principal.tenant_id,
+        user_id=principal.user_id,
+        action="api_key.created",
+        event_data={"name": api_key.name, "scopes": api_key.scopes},
+        ip=client_ip(request),
+    )
     return ApiKeyCreated(
         **ApiKeyOut.model_validate(api_key).model_dump(), key=raw_key
     )
@@ -60,6 +71,7 @@ def create_api_key(
 @router.delete("/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
 def revoke_api_key(
     key_id: UUID,
+    request: Request,
     principal: Principal = Depends(require("keys:manage")),
     db: Session = Depends(get_db),
 ) -> Response:
@@ -73,4 +85,12 @@ def revoke_api_key(
     if api_key.revoked_at is None:
         api_key.revoked_at = utcnow()
         db.commit()
+        record_audit(
+            db,
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            action="api_key.revoked",
+            event_data={"name": api_key.name},
+            ip=client_ip(request),
+        )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

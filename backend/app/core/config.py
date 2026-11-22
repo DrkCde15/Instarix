@@ -56,6 +56,14 @@ class Settings(BaseSettings):
     # Storage local de mídia; em produção use um volume compartilhado.
     media_storage_dir: str = str(BASE_DIR / "media")
 
+    # Uploads de mídia para publicação (multipart).
+    upload_max_bytes: int = 25 * 1024 * 1024
+
+    # Webhooks: timeout, tentativas e backoff exponencial.
+    webhook_timeout_seconds: float = 5.0
+    webhook_max_attempts: int = 5
+    webhook_backoff_base_seconds: int = 10
+
     @field_validator("jwt_secret")
     @classmethod
     def _jwt_secret_long_enough(cls, value: str) -> str:

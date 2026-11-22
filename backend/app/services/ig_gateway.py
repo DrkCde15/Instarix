@@ -41,6 +41,12 @@ class DownloadedMedia:
     path: Path
 
 
+@dataclass(frozen=True)
+class PublishedMedia:
+    media_pk: str
+    code: str | None = None
+
+
 class IgGatewayError(Exception):
     """Erro de leitura já sanitizado para virar falha de job."""
 
@@ -132,6 +138,54 @@ class IgGateway(Protocol):
         proxy: str | None,
         session: dict[str, Any],
     ) -> dict[str, Any]: ...
+
+    def publish_photo(
+        self,
+        *,
+        path: Path,
+        caption: str,
+        proxy: str | None,
+        session: dict[str, Any],
+    ) -> PublishedMedia: ...
+
+    def publish_video(
+        self,
+        *,
+        path: Path,
+        caption: str,
+        thumbnail: Path | None,
+        proxy: str | None,
+        session: dict[str, Any],
+    ) -> PublishedMedia: ...
+
+    def publish_reel(
+        self,
+        *,
+        path: Path,
+        caption: str,
+        thumbnail: Path | None,
+        proxy: str | None,
+        session: dict[str, Any],
+    ) -> PublishedMedia: ...
+
+    def publish_album(
+        self,
+        *,
+        paths: list[Path],
+        caption: str,
+        proxy: str | None,
+        session: dict[str, Any],
+    ) -> PublishedMedia: ...
+
+    def publish_story(
+        self,
+        *,
+        path: Path,
+        kind: str,
+        caption: str,
+        proxy: str | None,
+        session: dict[str, Any],
+    ) -> PublishedMedia: ...
 
 
 class InstagrapiGateway:
@@ -402,6 +456,103 @@ class InstagrapiGateway:
             self._raise_read_error(exc)
             raise
         return dict(data)
+
+    @staticmethod
+    def _published(media: Any) -> PublishedMedia:
+        return PublishedMedia(
+            media_pk=str(getattr(media, "pk", "")),
+            code=getattr(media, "code", None),
+        )
+
+    def publish_photo(
+        self,
+        *,
+        path: Path,
+        caption: str,
+        proxy: str | None,
+        session: dict[str, Any],
+    ) -> PublishedMedia:
+        client = self._client({}, proxy, session)
+        try:
+            media = client.photo_upload(Path(path), caption)
+        except Exception as exc:  # noqa: BLE001 - mapeado abaixo
+            self._raise_read_error(exc)
+            raise
+        return self._published(media)
+
+    def publish_video(
+        self,
+        *,
+        path: Path,
+        caption: str,
+        thumbnail: Path | None,
+        proxy: str | None,
+        session: dict[str, Any],
+    ) -> PublishedMedia:
+        client = self._client({}, proxy, session)
+        try:
+            media = client.video_upload(
+                Path(path), caption, thumbnail=Path(thumbnail) if thumbnail else None
+            )
+        except Exception as exc:  # noqa: BLE001 - mapeado abaixo
+            self._raise_read_error(exc)
+            raise
+        return self._published(media)
+
+    def publish_reel(
+        self,
+        *,
+        path: Path,
+        caption: str,
+        thumbnail: Path | None,
+        proxy: str | None,
+        session: dict[str, Any],
+    ) -> PublishedMedia:
+        client = self._client({}, proxy, session)
+        try:
+            media = client.clip_upload(
+                Path(path), caption, thumbnail=Path(thumbnail) if thumbnail else None
+            )
+        except Exception as exc:  # noqa: BLE001 - mapeado abaixo
+            self._raise_read_error(exc)
+            raise
+        return self._published(media)
+
+    def publish_album(
+        self,
+        *,
+        paths: list[Path],
+        caption: str,
+        proxy: str | None,
+        session: dict[str, Any],
+    ) -> PublishedMedia:
+        client = self._client({}, proxy, session)
+        try:
+            media = client.album_upload([Path(path) for path in paths], caption)
+        except Exception as exc:  # noqa: BLE001 - mapeado abaixo
+            self._raise_read_error(exc)
+            raise
+        return self._published(media)
+
+    def publish_story(
+        self,
+        *,
+        path: Path,
+        kind: str,
+        caption: str,
+        proxy: str | None,
+        session: dict[str, Any],
+    ) -> PublishedMedia:
+        client = self._client({}, proxy, session)
+        try:
+            if kind == "video":
+                media = client.video_upload_to_story(Path(path), caption=caption)
+            else:
+                media = client.photo_upload_to_story(Path(path), caption=caption)
+        except Exception as exc:  # noqa: BLE001 - mapeado abaixo
+            self._raise_read_error(exc)
+            raise
+        return self._published(media)
 
 
 def get_ig_gateway() -> IgGateway:
