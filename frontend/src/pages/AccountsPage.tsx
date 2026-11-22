@@ -1,4 +1,13 @@
-import { KeyRound, Plus, Search, ShieldCheck, Users, X } from "lucide-react";
+import {
+  ArrowUpRight,
+  Clock,
+  KeyRound,
+  Plus,
+  Search,
+  ShieldCheck,
+  Users,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api";
@@ -161,10 +170,10 @@ export function AccountsPage() {
             <Link
               key={account.id}
               to={`/accounts/${account.id}`}
-              className="account-card"
+              className={`account-card account-card-${account.status.replaceAll("_", "-")}`}
             >
-              <div className="account-card-top">
-                <div className="avatar avatar-large">
+              <div className="account-card-identity">
+                <div className="avatar account-card-avatar">
                   {account.label.slice(0, 1).toUpperCase()}
                 </div>
                 <span
@@ -174,22 +183,32 @@ export function AccountsPage() {
                 </span>
               </div>
               <div className="account-card-body">
-                <h3>{account.label}</h3>
+                <div className="account-card-title">
+                  <h3>{account.label}</h3>
+                  <ArrowUpRight
+                    size={16}
+                    className="account-card-arrow"
+                    aria-hidden="true"
+                  />
+                </div>
                 <span className="handle">@{account.username}</span>
               </div>
-              <div className="account-card-foot">
-                <span>
-                  <ShieldCheck size={14} />
+              <div className="account-card-meta">
+                <span className={account.has_session ? "meta-on" : "meta-off"}>
+                  <ShieldCheck size={13} />
                   {account.has_session ? "Sessão salva" : "Sem sessão"}
                 </span>
-                <span>
-                  <KeyRound size={14} />
+                <span className={account.has_proxy ? "meta-on" : "meta-off"}>
+                  <KeyRound size={13} />
                   {account.has_proxy ? "Proxy ativo" : "Sem proxy"}
                 </span>
               </div>
-              <div className="account-card-date">
-                Último login {formatShortDate(account.last_login_at)} ·{" "}
-                {relativeTime(account.created_at)}
+              <div className="account-card-foot">
+                <span>
+                  <Clock size={12} />
+                  Login {formatShortDate(account.last_login_at)}
+                </span>
+                <span>criada {relativeTime(account.created_at)}</span>
               </div>
             </Link>
           ))}
