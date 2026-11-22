@@ -6,6 +6,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         {
             "accounts:read",
             "accounts:write",
+            "accounts:2fa",
             "jobs:read",
             "jobs:write",
             "keys:manage",

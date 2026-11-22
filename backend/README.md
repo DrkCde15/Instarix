@@ -193,6 +193,8 @@ python -m app.workers.worker --once     # sweeper + processa a fila atual
 
 - `POST /v1/accounts/{id}/jobs` responde `202` com `Location`. Um
   `idempotency_key` repetido devolve o job existente com `200`.
+- `GET /v1/accounts/{id}/jobs` lista os jobs da conta com os mesmos filtros
+  (`status`, `type`) e paginação por cursor de `GET /v1/jobs`.
 - `POST /v1/jobs/{id}/cancel` só cancela job `queued`; caso contrário `409
   job_not_cancelable`.
 - `attempts` sobe no claim. Erros transitórios (`instagram_unavailable`) voltam
@@ -284,6 +286,9 @@ gestão de webhook. `GET /v1/audit-logs` permite filtrar por `action`,
 - API keys no formato `ik_live_<prefix>_<secret>`, persistidas só como hash e
   limitadas por escopo (`accounts:read`, `accounts:write`, `accounts:2fa`,
   `jobs:read`, `jobs:write`, `keys:manage`).
+- Papéis: `owner` tem acesso total; `admin` gerencia contas, jobs, API keys,
+  webhooks e auditoria e pode concluir 2FA; `operator` lê contas, conclui 2FA e
+  gerencia jobs; `viewer` só lê contas e jobs.
 - Toda query de conta/API key filtra por `tenant_id`; IDs de outro tenant
   respondem 404.
 - Login tem rate limit por IP e lockout temporário por conta após

@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from app.core.crypto import get_cipher
 from app.core.time import utcnow
-from app.db.models import IgAccount, LoginAttempt
+from app.db.models import IgAccount, LoginAttempt, User
 from app.services.ig_gateway import HealthOutcome, LoginOutcome
 from tests.fakes import FakeIgGateway, success_outcome
 from tests.helpers import bearer, create_account, register
@@ -304,6 +304,24 @@ def test_2fa_scope_allows_two_factor_only(client, ig_gateway: FakeIgGateway):
         json={"code": "123456"},
         headers={"X-API-Key": key["key"]},
     )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "active"
+
+
+def test_admin_role_can_submit_two_factor(
+    client, session_factory, ig_gateway: FakeIgGateway
+):
+    tokens = register(client)
+    account = create_account(client, tokens)
+    start_2fa(client, tokens, account["id"], ig_gateway)
+
+    with session_factory() as session:
+        user = session.query(User).one()
+        user.role = "admin"
+        session.commit()
+
+    ig_gateway.login_outcome = success_outcome()
+    response = submit_2fa(client, tokens, account["id"])
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "active"
 

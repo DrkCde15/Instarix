@@ -85,6 +85,53 @@ def test_create_list_get_and_cancel_job(client):
     assert again.json()["error"]["code"] == "job_not_cancelable"
 
 
+def test_list_jobs_by_account_with_pagination_and_filters(client):
+    tokens = register(client)
+    account = create_account(client, tokens, username="conta_a")
+    other = create_account(client, tokens, username="conta_b")
+
+    first = enqueue(client, tokens, account["id"], "media.list").json()
+    second = enqueue(client, tokens, account["id"], "insights.account").json()
+    enqueue(client, tokens, other["id"], "media.list")
+
+    page = client.get(
+        f"/v1/accounts/{account['id']}/jobs?limit=1", headers=bearer(tokens)
+    )
+    assert page.status_code == 200, page.text
+    body = page.json()
+    assert len(body["items"]) == 1
+    assert body["items"][0]["id"] == second["id"]
+    assert body["next_cursor"] is not None
+
+    next_page = client.get(
+        f"/v1/accounts/{account['id']}/jobs?limit=1&cursor={body['next_cursor']}",
+        headers=bearer(tokens),
+    )
+    assert next_page.status_code == 200, next_page.text
+    assert [item["id"] for item in next_page.json()["items"]] == [first["id"]]
+    assert next_page.json()["next_cursor"] is None
+
+    filtered = client.get(
+        f"/v1/accounts/{account['id']}/jobs?type=media.list",
+        headers=bearer(tokens),
+    )
+    assert filtered.status_code == 200
+    assert [item["id"] for item in filtered.json()["items"]] == [first["id"]]
+
+
+def test_list_jobs_by_account_is_tenant_isolated(client):
+    alice = register(client, email="alice@example.com", tenant_name="Alice Co")
+    bob = register(client, email="bob@example.com", tenant_name="Bob Co")
+    account = create_account(client, alice)
+    enqueue(client, alice, account["id"])
+
+    response = client.get(
+        f"/v1/accounts/{account['id']}/jobs", headers=bearer(bob)
+    )
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "account_not_found"
+
+
 def test_idempotency_key_replays_the_same_job(client):
     tokens = register(client)
     account = create_account(client, tokens)
