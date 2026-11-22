@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.api.deps import get_media_storage
 from app.core.config import get_settings
 from app.core.crypto import get_cipher
-from app.core.ratelimit import reset_auth_guard
+from app.core.ratelimit import reset_api_key_guard, reset_auth_guard
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
@@ -95,6 +95,7 @@ def client(
             yield session
 
     reset_auth_guard()
+    reset_api_key_guard()
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_device_provider] = lambda: FakeDeviceProvider()
     app.dependency_overrides[get_ig_gateway] = lambda: ig_gateway

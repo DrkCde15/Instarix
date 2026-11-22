@@ -9,11 +9,13 @@ from sqlalchemy import select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings, get_settings
 from app.core.errors import AppError, conflict, not_found
 from app.core.time import utcnow
 from app.db.models import IgAccount, IgAccountStatus, Job, JobStatus
 from app.jobs.payloads import JOB_PAYLOAD_MODELS, JOB_TYPES
 from app.schemas.job import JobCreate
+from app.services.quotas import QuotaService
 
 
 @dataclass(frozen=True)
@@ -29,8 +31,9 @@ class JobCreateResult:
 
 
 class JobService:
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: Session, settings: Settings | None = None) -> None:
         self.db = db
+        self.settings = settings or get_settings()
 
     def _get_account(
         self, tenant_id: uuid.UUID, account_id: uuid.UUID
@@ -85,6 +88,7 @@ class JobService:
             if existing is not None:
                 return JobCreateResult(existing, created=False)
 
+        QuotaService(self.db, self.settings).check_job(tenant_id)
         now = utcnow()
         job = Job(
             tenant_id=tenant_id,

@@ -198,6 +198,35 @@ def _email_key(email: str) -> str:
     return email.strip().lower()
 
 
+class ApiKeyGuard:
+    """Rate limit por prefixo de API key, em janela deslizante."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        limiter: RateLimiter | None = None,
+    ) -> None:
+        self._settings = settings
+        self._limiter = limiter or RateLimiter()
+
+    def check(self, key_prefix: str) -> None:
+        retry_after = self._limiter.consume(
+            f"api-key:{key_prefix}",
+            self._settings.api_key_rate_limit,
+            self._settings.api_key_rate_window_seconds,
+        )
+        if retry_after is None:
+            return
+        seconds = max(1, math.ceil(retry_after))
+        raise AppError(
+            429,
+            "api_key_rate_limited",
+            f"Rate limit da API key excedido. Tente novamente em {seconds}s.",
+            headers={"Retry-After": str(seconds)},
+        )
+
+
 _guard: AuthGuard | None = None
 
 
@@ -211,3 +240,18 @@ def get_auth_guard() -> AuthGuard:
 def reset_auth_guard() -> None:
     global _guard
     _guard = None
+
+
+_api_key_guard: ApiKeyGuard | None = None
+
+
+def get_api_key_guard() -> ApiKeyGuard:
+    global _api_key_guard
+    if _api_key_guard is None:
+        _api_key_guard = ApiKeyGuard(get_settings())
+    return _api_key_guard
+
+
+def reset_api_key_guard() -> None:
+    global _api_key_guard
+    _api_key_guard = None

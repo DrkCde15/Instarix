@@ -11,7 +11,6 @@ import random
 import secrets
 import uuid
 from datetime import timedelta
-from pathlib import Path
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -22,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.crypto import Cipher
-from app.core.errors import AppError, forbidden, not_found
+from app.core.errors import AppError, not_found
 from app.core.time import utcnow
 from app.db.models import WebhookDelivery, WebhookEndpoint, WebhookStatus
 

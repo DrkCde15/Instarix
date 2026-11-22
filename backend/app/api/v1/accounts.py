@@ -7,6 +7,7 @@ from app.api.deps import (
     Principal,
     get_account_service,
     get_login_service,
+    get_quota_service,
     require,
 )
 from app.api.pagination import decode_cursor, encode_cursor
@@ -23,6 +24,7 @@ from app.schemas.account import (
 from app.services.accounts import AccountService
 from app.services.audit import record_audit
 from app.services.login import LoginService
+from app.services.quotas import QuotaService
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
@@ -56,8 +58,10 @@ def create_account(
     request: Request,
     principal: Principal = Depends(require("accounts:write")),
     service: AccountService = Depends(get_account_service),
+    quota: QuotaService = Depends(get_quota_service),
     db: Session = Depends(get_db),
 ) -> AccountOut:
+    quota.check_account(principal.tenant_id)
     account = service.create(principal.tenant_id, payload)
     record_audit(
         db,

@@ -8,7 +8,9 @@ from app.api.v1 import (
     jobs,
     me,
     media,
+    metrics,
     uploads,
+    usage,
     webhooks,
 )
 
@@ -22,4 +24,6 @@ api_router.include_router(media.router)
 api_router.include_router(uploads.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(audit.router)
+api_router.include_router(metrics.router)
+api_router.include_router(usage.router)
 api_router.include_router(api_keys.router)

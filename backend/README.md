@@ -1,10 +1,11 @@
-# Instarix API — Fases 1 a 4
+# Instarix API — Fases 1 a 5
 
 Backend multi-tenant do Instarix: FastAPI + PostgreSQL + SQLAlchemy/Alembic, com
 credenciais do Instagram cifradas em repouso. As fases 1–4 entregam auth,
 tenants, contas, API keys, login real por conta, 2FA, sessão, health check, fila
 de jobs serializada por conta, leituras cacheadas, upload/publicação, webhooks
-com HMAC/retry e audit log.
+com HMAC/retry, audit log, quotas por plano, rate limit por API key, métricas,
+rotação de chaves e RLS opt-in.
 
 ## Stack
 
@@ -18,6 +19,7 @@ com HMAC/retry e audit log.
   worker próprio, sem Redis/arq nesta fase
 - Storage local para mídia baixada e uploads (S3/MinIO fica para depois)
 - Webhooks de saída com HMAC-SHA256 e retry exponencial
+- RLS por tenant no PostgreSQL (opt-in; requer role de worker com BYPASSRLS)
 
 ## Rodando localmente
 
@@ -65,7 +67,8 @@ login (sucesso, 2FA, código errado, expiração, challenge, senha inválida, se
 inválida e falha transitória), a fase 3 (criação/idempotência/cancelamento de
 jobs, serialização por conta, retry/backoff, recuperação pelo sweeper, cache de
 mídia/insights e download de assets) e a fase 4 (upload, publicação, proteção
-contra post ambíguo, webhooks com HMAC/retry e audit log).
+contra post ambíguo, webhooks com HMAC/retry e audit log) e a fase 5 (quotas,
+rate limit por API key, métricas, rotação de chaves e RLS opt-in).
 
 ## Variáveis de ambiente
 
@@ -93,6 +96,10 @@ contra post ambíguo, webhooks com HMAC/retry e audit log).
 | `WEBHOOK_TIMEOUT_SECONDS` | não | timeout de cada entrega de webhook (padrão 5 s) |
 | `WEBHOOK_MAX_ATTEMPTS` | não | tentativas por entrega (padrão 5) |
 | `WEBHOOK_BACKOFF_BASE_SECONDS` | não | base do backoff dos webhooks (padrão 10 s) |
+| `API_KEY_RATE_LIMIT` / `API_KEY_RATE_WINDOW_SECONDS` | não | requisições por API key (padrão 600/min); `0` desativa |
+| `QUOTA_FREE_ACCOUNTS` / `QUOTA_FREE_JOBS_PER_DAY` | não | quota do plano free (padrão 3 / 100) |
+| `QUOTA_PRO_ACCOUNTS` / `QUOTA_PRO_JOBS_PER_DAY` | não | quota do plano pro (padrão 25 / 5000) |
+| `RLS_ENABLED` | não | ativa o contexto de RLS na API; padrão `false` |
 | `REDIS_URL` | não | reservado; a fila atual usa apenas o PostgreSQL |
 
 ## API (v1)
@@ -123,6 +130,8 @@ contra post ambíguo, webhooks com HMAC/retry e audit log).
 | DELETE | `/v1/webhooks/{id}` | `webhooks:write` |
 | GET | `/v1/webhooks/{id}/deliveries` | `webhooks:read` |
 | GET | `/v1/audit-logs` | `audit:read` |
+| GET | `/v1/metrics` | `keys:manage` |
+| GET | `/v1/usage` | `accounts:read` |
 | GET/POST | `/v1/api-keys` | `keys:manage` |
 | DELETE | `/v1/api-keys/{id}` | `keys:manage` |
 | GET | `/healthz`, `/readyz` | públicas |
@@ -243,6 +252,27 @@ conta, login/2FA/logout, criação/revogação de API key, criação de job e
 gestão de webhook. `GET /v1/audit-logs` permite filtrar por `action`,
 `account_id` e paginar por cursor.
 
+## Endurecimento
+
+- **Quotas por plano:** `free` (3 contas / 100 jobs por dia) e `pro`
+  (25 / 5000); `enterprise` é ilimitado. Criar conta/job acima do limite devolve
+  `429 quota_exceeded`. `GET /v1/usage` mostra o consumo. Os limites são
+  configuráveis por `QUOTA_*`.
+- **Rate limit por API key:** janela deslizante por prefixo (padrão 600/min),
+  com `429 api_key_rate_limited` e `Retry-After`. JWT não passa por esse limite.
+- **Métricas:** `GET /v1/metrics` (Prometheus, exige `keys:manage`) com jobs por
+  tipo/status, profundidade da fila, contas por status, entregas e falhas de
+  webhook. Alertas recomendados estão em [`RUNBOOKS.md`](RUNBOOKS.md).
+- **Rotação de chaves:** coloque a chave nova no início de `SECRETS_KEYS` e
+  rode `python -m scripts.rotate_secrets`; o script re-cifra contas, sessões e
+  segredos de webhook com a chave primária e é idempotente.
+- **RLS opt-in:** `python -m scripts.enable_rls --apply` cria policies por
+  `tenant_id` nas tabelas de domínio. A API injeta `app.tenant_id` quando
+  `RLS_ENABLED=true`; o role do worker precisa de `BYPASSRLS` para reivindicar
+  jobs de todos os tenants. Detalhes e rollback em [`RUNBOOKS.md`](RUNBOOKS.md).
+- **Carga do dispatcher:** `python -m scripts.load_dispatcher` mede claim
+  concorrente e falha se houver job duplicado/não reivindicado.
+
 ## Segurança
 
 - Senhas de usuário: Argon2id.
@@ -306,6 +336,14 @@ gestão de webhook. `GET /v1/audit-logs` permite filtrar por `action`,
   não está coberto.
 - Publicações não têm agendamento (`schedule_at`) nem reconciliação automática
   de post ambíguo; o cliente precisa confirmar na conta.
+- O rate limit por API key é em memória por processo; com várias instâncias o
+  limite efetivo é multiplicado. Quotas são verificadas por leitura + escrita,
+  então duas requisições concorrentes podem passar do limite por uma unidade.
+- RLS é opt-in e exige PostgreSQL, policies aplicadas e role de worker com
+  `BYPASSRLS`; não é exercitado no SQLite dos testes. As consultas da aplicação
+  já filtram `tenant_id` mesmo sem RLS.
+- Métricas são calculadas no scrape (sem Prometheus client) e não há alertas
+  externos/Sentry integrados; os limiares estão no runbook.
 
 - `alembic check` no SQLite avisa que índices de expressão
   (`lower(email)`, `lower(username)`) não são refletidos; são criados
@@ -319,7 +357,6 @@ gestão de webhook. `GET /v1/audit-logs` permite filtrar por `action`,
 
 ## Próximas fases
 
-5. Endurecimento: quotas, rate limit por chave, métricas, rotação de chaves,
-   RLS, runbooks e teste de carga.
 6. S3/MinIO com uploads pré-assinados, agendamento de publicação e
    reconciliação de post ambíguo.
+7. Alertas externos (Prometheus/Sentry) e rate limit distribuído em Redis.

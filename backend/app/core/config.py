@@ -64,6 +64,22 @@ class Settings(BaseSettings):
     webhook_max_attempts: int = 5
     webhook_backoff_base_seconds: int = 10
 
+    # Rate limit por API key (janela deslizante, por processo).
+    # limit <= 0 desativa.
+    api_key_rate_limit: int = 600
+    api_key_rate_window_seconds: int = 60
+
+    # Quotas por plano. 0 significa ilimitado.
+    quota_free_accounts: int = 3
+    quota_free_jobs_per_day: int = 100
+    quota_pro_accounts: int = 25
+    quota_pro_jobs_per_day: int = 5000
+
+    # RLS opt-in (PostgreSQL). Requer scripts/enable_rls.py e um role de
+    # worker com BYPASSRLS. Desativado por padrão porque o SQLite dos testes
+    # não suporta policies.
+    rls_enabled: bool = False
+
     @field_validator("jwt_secret")
     @classmethod
     def _jwt_secret_long_enough(cls, value: str) -> str:

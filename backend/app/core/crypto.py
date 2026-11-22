@@ -39,6 +39,14 @@ class Cipher:
                 self._primary = fingerprint
         assert self._primary is not None  # garantido pelo check acima
 
+    @property
+    def primary_fingerprint(self) -> str:
+        assert self._primary is not None
+        return self._primary
+
+    def needs_rotation(self, value: str) -> bool:
+        return value.partition(":")[0] != self._primary
+
     def encrypt(self, plaintext: str) -> str:
         token = self._fernets[self._primary].encrypt(plaintext.encode())
         return f"{self._primary}:{token.decode()}"
