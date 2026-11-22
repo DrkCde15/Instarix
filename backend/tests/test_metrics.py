@@ -17,6 +17,22 @@ def test_metrics_exposes_queue_and_accounts(client):
     assert "webhook_delivery_failures_total 0" in body
 
 
+def test_metrics_are_scoped_to_the_caller_tenant(client):
+    alice = register(client, email="alice@example.com", tenant_name="Alice Co")
+    bob = register(client, email="bob@example.com", tenant_name="Bob Co")
+    account = create_account(client, alice)
+    enqueue(client, alice, account["id"])
+
+    bob_body = client.get("/v1/metrics", headers=bearer(bob)).text
+    assert 'jobs_total{type="media.list",status="queued"} 1' not in bob_body
+    assert 'accounts_by_status{status="pending_login"} 1' not in bob_body
+    assert "webhook_delivery_failures_total 0" in bob_body
+
+    alice_body = client.get("/v1/metrics", headers=bearer(alice)).text
+    assert 'jobs_total{type="media.list",status="queued"} 1' in alice_body
+    assert 'accounts_by_status{status="pending_login"} 1' in alice_body
+
+
 def test_metrics_requires_admin_scope(client):
     tokens = register(client)
     key = client.post(

@@ -24,11 +24,11 @@ def cached_media(
     service: ReadService = Depends(get_read_service),
 ) -> MediaListOut:
     job = service.latest_media_job(principal.tenant_id, account_id)
-    assert job.result is not None
+    result = job.result or {}
     return MediaListOut(
         job_id=job.id,
-        username=job.result.get("username") or "",
-        items=job.result.get("items") or [],
+        username=result.get("username") or "",
+        items=result.get("items") or [],
         cached_at=job.finished_at,
     )
 

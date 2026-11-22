@@ -1,8 +1,22 @@
 from tests.helpers import bearer, create_account, register
 from tests.test_jobs import enqueue, get_job, login_account, run_next
 
+PREFIXES = {
+    "image/jpeg": b"\xff\xd8\xff\xe0\x00\x10JFIF\x00",
+    "image/png": b"\x89PNG\r\n\x1a\n",
+    "image/webp": b"RIFF\x00\x00\x00\x00WEBP",
+    "video/mp4": b"\x00\x00\x00\x18ftypmp42",
+    "video/quicktime": b"\x00\x00\x00\x14ftypqt  ",
+}
 
-def upload(client, tokens, *, filename="foto.jpg", content=b"imagem-fake", kind="image/jpeg"):
+
+def fake_media(kind: str = "image/jpeg", extra: bytes = b"-fake") -> bytes:
+    return PREFIXES.get(kind, b"") + extra
+
+
+def upload(client, tokens, *, filename="foto.jpg", content=None, kind="image/jpeg"):
+    if content is None:
+        content = fake_media(kind)
     return client.post(
         "/v1/uploads",
         files={"file": (filename, content, kind)},
@@ -12,12 +26,13 @@ def upload(client, tokens, *, filename="foto.jpg", content=b"imagem-fake", kind=
 
 def test_upload_saves_file_and_validates_type(client, media_storage):
     tokens = register(client)
-    response = upload(client, tokens)
+    content = fake_media()
+    response = upload(client, tokens, content=content)
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["storage_key"].startswith("uploads/")
     assert body["content_type"] == "image/jpeg"
-    assert body["size_bytes"] == len(b"imagem-fake")
+    assert body["size_bytes"] == len(content)
     assert media_storage.path(body["storage_key"]).is_file()
 
     invalid = upload(client, tokens, filename="x.txt", kind="text/plain")
@@ -27,6 +42,10 @@ def test_upload_saves_file_and_validates_type(client, media_storage):
     empty = upload(client, tokens, content=b"")
     assert empty.status_code == 422
     assert empty.json()["error"]["code"] == "empty_upload"
+
+    spoofed = upload(client, tokens, content=b"nao-e-imagem")
+    assert spoofed.status_code == 422
+    assert spoofed.json()["error"]["code"] == "invalid_upload_content"
 
 
 def test_publish_photo_uses_uploaded_file(client, worker, ig_gateway):
@@ -51,7 +70,7 @@ def test_publish_photo_uses_uploaded_file(client, worker, ig_gateway):
     call = ig_gateway.publish_calls[-1]
     assert call["action"] == "photo"
     assert call["caption"] == "legal #teste"
-    assert call["path"].read_bytes() == b"imagem-fake"
+    assert call["path"].read_bytes() == fake_media()
     assert call["session"] is not None
 
 
@@ -109,7 +128,11 @@ def test_publish_variants_reach_gateway(client, worker, ig_gateway):
     photo = upload(client, tokens, filename="a.jpg").json()
     photo2 = upload(client, tokens, filename="b.png", kind="image/png").json()
     video = upload(
-        client, tokens, filename="c.mp4", content=b"video-fake", kind="video/mp4"
+        client,
+        tokens,
+        filename="c.mp4",
+        content=fake_media("video/mp4"),
+        kind="video/mp4",
     ).json()
     thumb = upload(client, tokens, filename="thumb.webp", kind="image/webp").json()
 

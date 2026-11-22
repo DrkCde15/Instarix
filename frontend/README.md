@@ -67,16 +67,22 @@ estático com fallback para `index.html` (SPA).
 
 ## Autenticação
 
-- `POST /v1/auth/token` e `/v1/auth/register` retornam access + refresh tokens.
-- Os tokens ficam em `localStorage` (`instarix.access` e `instarix.refresh`).
+- `POST /v1/auth/token`, `/v1/auth/register` e `/v1/auth/refresh` devolvem o
+  access token no corpo e gravam o refresh token em cookie `HttpOnly`
+  (`instarix_refresh`, `SameSite=Lax`, `Secure` em produção).
+- O access token fica **apenas em memória**; o refresh token é inacessível ao
+  JavaScript. O cliente usa `credentials: "include"` em todas as chamadas.
+- No boot, o `AuthProvider` chama `GET /v1/me`; se houver cookie válido, a
+  sessão é restaurada, senão o usuário vai para o login.
 - Em um `401`, o cliente tenta `POST /v1/auth/refresh` uma vez e repete a
   requisição; requisições concorrentes compartilham o mesmo refresh.
-- Se o refresh falhar, os tokens são apagados e o evento
-  `instarix:auth-expired` devolve o usuário ao login.
+- Se o refresh falhar, a sessão é encerrada e o evento `instarix:auth-expired`
+  devolve o usuário ao login.
 
-Como qualquer aplicação que guarda tokens em `localStorage`, um XSS no domínio
-expõe as credenciais. O backend aplica CORS e as respostas não incluem senhas,
-sessões ou códigos 2FA.
+Como o access token vive só na memória, recarregar a página depende do cookie
+httpOnly para renová-lo. O cookie usa `SameSite=Lax`; para frontend e API em
+origens diferentes, configure `AUTH_COOKIE_SAMESITE=none` com `Secure` e CORS
+com credenciais no backend.
 
 ## Comportamento da API
 
@@ -99,7 +105,7 @@ sessões ou códigos 2FA.
 src/
 ├── App.tsx              rotas e gate de autenticação
 ├── main.tsx             entrada React
-├── api.ts               cliente HTTP, tokens, refresh, upload e download
+├── api.ts               cliente HTTP, refresh via cookie, upload e download
 ├── auth.tsx             AuthProvider/useAuth
 ├── toast.tsx            notificações
 ├── types.ts             contratos da API

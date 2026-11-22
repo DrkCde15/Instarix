@@ -1,5 +1,7 @@
 """CRUD de contas do Instagram com segredos cifrados."""
 
+import ipaddress
+import socket
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -9,6 +11,7 @@ from sqlalchemy import select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings, get_settings
 from app.core.crypto import Cipher
 from app.core.errors import AppError, conflict, not_found
 from app.core.time import utcnow
@@ -23,19 +26,47 @@ class AccountPageResult:
     has_more: bool
 
 
-def _validate_proxy(proxy: str) -> str:
+def _proxy_host_allowed(host: str, port: int, *, allow_private: bool) -> bool:
+    if host in {"localhost", "localhost.localdomain"} or host.endswith(".local"):
+        return allow_private
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        if allow_private:
+            return True
+        try:
+            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except OSError:
+            return False
+        return all(
+            ipaddress.ip_address(info[4][0]).is_global for info in infos
+        )
+    return allow_private or address.is_global
+
+
+def _validate_proxy(proxy: str, *, allow_private: bool) -> str:
     proxy = proxy.strip()
     parts = urlsplit(proxy)
     if parts.scheme not in {"http", "https"} or not parts.hostname:
         raise AppError(422, "invalid_proxy", "proxy deve ser uma URL http(s) com host.")
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    if not _proxy_host_allowed(parts.hostname.lower(), port, allow_private=allow_private):
+        raise AppError(422, "invalid_proxy", "proxy aponta para um host não permitido.")
     return proxy
 
 
 class AccountService:
-    def __init__(self, db: Session, cipher: Cipher, device_provider: DeviceProfileProvider):
+    def __init__(
+        self,
+        db: Session,
+        cipher: Cipher,
+        device_provider: DeviceProfileProvider,
+        settings: Settings | None = None,
+    ):
         self.db = db
         self.cipher = cipher
         self.device_provider = device_provider
+        self.settings = settings or get_settings()
 
     def create(self, tenant_id: uuid.UUID, data: AccountCreate) -> IgAccount:
         device_settings = self.device_provider.generate()
@@ -44,7 +75,15 @@ class AccountService:
             label=data.label,
             username=data.username,
             password_enc=self.cipher.encrypt(data.password),
-            proxy_enc=self.cipher.encrypt(_validate_proxy(data.proxy)) if data.proxy else None,
+            proxy_enc=(
+                self.cipher.encrypt(
+                    _validate_proxy(
+                        data.proxy, allow_private=self.settings.allow_private_proxies
+                    )
+                )
+                if data.proxy
+                else None
+            ),
             device_settings_enc=self.cipher.encrypt_json(device_settings),
             status=IgAccountStatus.PENDING_LOGIN,
         )
@@ -114,7 +153,11 @@ class AccountService:
 
         if "proxy" in fields:
             if data.proxy:
-                account.proxy_enc = self.cipher.encrypt(_validate_proxy(data.proxy))
+                account.proxy_enc = self.cipher.encrypt(
+                    _validate_proxy(
+                        data.proxy, allow_private=self.settings.allow_private_proxies
+                    )
+                )
             else:
                 account.proxy_enc = None
 

@@ -9,3 +9,7 @@ session.json
 
 # Mídia baixada pelos jobs (storage local da fase 3)
 backend/media/
+
+# Banco SQLite local de desenvolvimento
+backend/dev.db
+backend/dev.db-*

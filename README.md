@@ -19,11 +19,27 @@ O projeto é dividido em dois pacotes:
 | Camada | Tecnologias |
 |---|---|
 | Backend | Python 3.12, FastAPI, SQLAlchemy 2, Alembic, PostgreSQL |
-| Autenticação | JWT de acesso + refresh token rotativo, API keys, Argon2id |
+| Autenticação | JWT de acesso em memória + refresh rotativo em cookie httpOnly, API keys, Argon2id |
 | Criptografia | Fernet para senhas, sessões e segredos de webhook |
 | Jobs | Fila no PostgreSQL com worker próprio, sem Redis nesta fase |
 | Frontend | React 19, TypeScript, Vite 6, React Router 7 |
 | Integração | `instagrapi`, webhooks HMAC-SHA256 com retry |
+
+## Segurança
+
+- Todas as consultas — inclusive as métricas Prometheus — filtram por
+  `tenant_id`; IDs de outro tenant respondem `404`.
+- O refresh token é rotativo, com lock transacional e detecção de reuso que
+  revoga a família. O navegador recebe o refresh em cookie `HttpOnly, Secure`
+  (configurável) e mantém o access token apenas em memória.
+- Webhooks validam a URL e resolvem o DNS antes de cada envio, recusando IPs
+  privados/loopback e redirects. Proxies de conta também recusam hosts privados
+  fora de desenvolvimento.
+- `X-Forwarded-For` só é considerado com `TRUST_PROXY_HEADERS=true`, para uso
+  atrás de um proxy reverso controlado.
+- Uploads são validados por extensão, `Content-Type` e magic bytes.
+- `backend/tests/test_migrations.py` compara o schema gerado pelo Alembic com
+  os modelos SQLAlchemy para detectar drift.
 
 ## Estrutura
 
@@ -74,6 +90,9 @@ source .venv/bin/activate
 python -m app.workers.worker
 ```
 
+Em desenvolvimento, defina `EMBEDDED_WORKER_ENABLED=true` no `.env` para o
+próprio Uvicorn processar a fila e dispensar esse segundo terminal.
+
 Também é possível subir API e worker com Docker:
 
 ```bash
@@ -86,6 +105,27 @@ docker compose up --build
 Configuração completa, rotas, fluxo de login/2FA, fila e limitações estão em
 [`backend/README.md`](backend/README.md). Alertas e operação estão em
 [`backend/RUNBOOKS.md`](backend/RUNBOOKS.md).
+
+### Alternativa local sem PostgreSQL
+
+Para desenvolvimento rápido, use SQLite em vez de PostgreSQL. Não use esse
+banco em produção:
+
+No `backend/.env`, use:
+
+```dotenv
+DATABASE_URL=sqlite:///./dev.db
+EMBEDDED_WORKER_ENABLED=true
+```
+
+Depois basta subir um único processo:
+
+```bash
+cd backend
+source .venv/bin/activate
+alembic upgrade head
+uvicorn app.main:app --reload
+```
 
 ## Rodando o frontend
 

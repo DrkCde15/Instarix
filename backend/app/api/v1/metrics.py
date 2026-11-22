@@ -10,7 +10,10 @@ router = APIRouter(prefix="/metrics", tags=["metrics"])
 
 @router.get("")
 def metrics(
-    _: Principal = Depends(require("keys:manage")),
+    principal: Principal = Depends(require("keys:manage")),
     db: Session = Depends(get_db),
 ) -> Response:
-    return Response(content=collect_metrics(db), media_type="text/plain; version=0.0.4")
+    return Response(
+        content=collect_metrics(db, principal.tenant_id),
+        media_type="text/plain; version=0.0.4",
+    )

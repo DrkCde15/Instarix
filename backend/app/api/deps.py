@@ -149,8 +149,9 @@ def get_account_service(
     db: Session = Depends(get_db),
     cipher: Cipher = Depends(get_cipher),
     device_provider: DeviceProfileProvider = Depends(get_device_provider),
+    settings: Settings = Depends(get_settings),
 ) -> AccountService:
-    return AccountService(db, cipher, device_provider)
+    return AccountService(db, cipher, device_provider, settings)
 
 
 def get_login_service(

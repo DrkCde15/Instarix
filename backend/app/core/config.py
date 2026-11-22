@@ -28,6 +28,20 @@ class Settings(BaseSettings):
     access_token_ttl_minutes: int = 15
     refresh_token_ttl_days: int = 30
 
+    # Refresh token em cookie httpOnly para o navegador. O corpo da resposta
+    # continua trazendo o token para clientes não-browser.
+    auth_cookie_secure: bool | None = None
+    auth_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+    auth_cookie_domain: str | None = None
+    auth_refresh_cookie_name: str = "instarix_refresh"
+    auth_cookie_path: str = "/v1/auth"
+
+    # Só confie em X-Forwarded-For atrás de um proxy reverso controlado.
+    trust_proxy_headers: bool = False
+
+    # Proxies de conta: em produção recusa hosts privados por padrão.
+    proxy_allow_private: bool | None = None
+
     # Chaves Fernet em CSV; a primeira criptografa, todas descriptografam.
     secrets_keys: str
     registration_enabled: bool = True
@@ -52,6 +66,9 @@ class Settings(BaseSettings):
     job_lock_timeout_seconds: int = 600
     job_backoff_base_seconds: int = 5
     job_worker_threads: int = 2
+    # Sobe o worker no processo da API. Conveniente para desenvolvimento local;
+    # em produção mantenha false e rode o worker como processo separado.
+    embedded_worker_enabled: bool = False
 
     # Storage local de mídia; em produção use um volume compartilhado.
     media_storage_dir: str = str(BASE_DIR / "media")
@@ -101,6 +118,16 @@ class Settings(BaseSettings):
     @property
     def is_prod(self) -> bool:
         return self.environment == "prod"
+
+    @property
+    def cookie_secure(self) -> bool:
+        return self.is_prod if self.auth_cookie_secure is None else self.auth_cookie_secure
+
+    @property
+    def allow_private_proxies(self) -> bool:
+        if self.proxy_allow_private is None:
+            return not self.is_prod
+        return self.proxy_allow_private
 
 
 @lru_cache

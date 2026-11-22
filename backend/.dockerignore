@@ -2,5 +2,14 @@
 .pytest_cache
 __pycache__
 *.pyc
+.git
+.gitignore
 .env
+.env.*
+!.env.example
 tests
+dev.db
+dev.db-*
+*.sqlite3
+session.json
+media

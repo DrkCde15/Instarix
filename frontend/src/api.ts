@@ -23,8 +23,7 @@ const BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(
   "",
 ) ?? "";
 
-const ACCESS_KEY = "instarix.access";
-const REFRESH_KEY = "instarix.refresh";
+
 
 export class ApiError extends Error {
   status: number;
@@ -37,16 +36,16 @@ export class ApiError extends Error {
   }
 }
 
+// Access token só em memória; o refresh token vive em cookie httpOnly.
+let accessToken: string | null = null;
+
 export const tokens = {
-  access: () => localStorage.getItem(ACCESS_KEY),
-  refresh: () => localStorage.getItem(REFRESH_KEY),
+  access: () => accessToken,
   set(pair: TokenPair) {
-    localStorage.setItem(ACCESS_KEY, pair.access_token);
-    localStorage.setItem(REFRESH_KEY, pair.refresh_token);
+    accessToken = pair.access_token;
   },
   clear() {
-    localStorage.removeItem(ACCESS_KEY);
-    localStorage.removeItem(REFRESH_KEY);
+    accessToken = null;
   },
 };
 
@@ -88,13 +87,10 @@ async function parseError(response: Response): Promise<ApiError> {
 let refreshPromise: Promise<boolean> | null = null;
 
 async function refreshTokens(): Promise<boolean> {
-  const refresh = tokens.refresh();
-  if (!refresh) return false;
   if (!refreshPromise) {
     refreshPromise = fetch(`${BASE}/v1/auth/refresh`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: refresh }),
+      credentials: "include",
     })
       .then(async (response) => {
         if (!response.ok) return false;
@@ -132,6 +128,7 @@ async function request<T>(
   let response = await fetch(`${BASE}${path}`, {
     ...init,
     headers: finalHeaders,
+    credentials: "include",
   });
 
   if (response.status === 401 && !skipAuth && !skipRefresh) {
@@ -146,6 +143,7 @@ async function request<T>(
       response = await fetch(`${BASE}${path}`, {
         ...init,
         headers: retryHeaders,
+        credentials: "include",
       });
     } else {
       expireSession();
@@ -199,18 +197,14 @@ export const api = {
   },
 
   async logout(): Promise<void> {
-    const refresh = tokens.refresh();
-    if (refresh) {
-      try {
-        await request<void>("/v1/auth/logout", {
-          method: "POST",
-          body: JSON.stringify({ refresh_token: refresh }),
-          skipAuth: true,
-          skipRefresh: true,
-        });
-      } catch {
-        // logout local continua mesmo se o remoto falhar
-      }
+    try {
+      await request<void>("/v1/auth/logout", {
+        method: "POST",
+        skipAuth: true,
+        skipRefresh: true,
+      });
+    } catch {
+      // logout local continua mesmo se o remoto falhar
     }
     tokens.clear();
   },
@@ -360,10 +354,12 @@ export const api = {
 
     let response = await fetch(`${BASE}/v1/media/${assetId}`, {
       headers: authHeaders(),
+      credentials: "include",
     });
     if (response.status === 401 && (await refreshTokens())) {
       response = await fetch(`${BASE}/v1/media/${assetId}`, {
         headers: authHeaders(),
+        credentials: "include",
       });
     }
     if (!response.ok) {
@@ -386,7 +382,10 @@ export const api = {
     const headers = new Headers();
     const access = tokens.access();
     if (access) headers.set("Authorization", `Bearer ${access}`);
-    const response = await fetch(`${BASE}/v1/metrics`, { headers });
+    const response = await fetch(`${BASE}/v1/metrics`, {
+      headers,
+      credentials: "include",
+    });
     if (!response.ok) throw await parseError(response);
     return response.text();
   },

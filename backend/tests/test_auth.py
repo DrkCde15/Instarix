@@ -73,6 +73,34 @@ def test_refresh_rotation_and_reuse_detection(client, session_factory):
         )
 
 
+def test_refresh_and_logout_use_httponly_cookie(client):
+    created = client.post(
+        "/v1/auth/register",
+        json={
+            "tenant_name": "Cookie Co",
+            "email": "cookie@example.com",
+            "password": "senha-forte-123",
+        },
+    )
+    assert created.status_code == 201, created.text
+    set_cookie = created.headers["set-cookie"]
+    assert "instarix_refresh=" in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "Path=/v1/auth" in set_cookie
+
+    first = created.json()
+    assert client.cookies.get("instarix_refresh") == first["refresh_token"]
+
+    refreshed = client.post("/v1/auth/refresh")
+    assert refreshed.status_code == 200, refreshed.text
+    second = refreshed.json()
+    assert second["refresh_token"] != first["refresh_token"]
+    assert client.cookies.get("instarix_refresh") == second["refresh_token"]
+
+    assert client.post("/v1/auth/logout").status_code == 204
+    assert client.post("/v1/auth/refresh").status_code == 401
+
+
 def test_logout_revokes_refresh_token(client):
     tokens = register(client)
     assert (

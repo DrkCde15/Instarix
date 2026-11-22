@@ -111,8 +111,11 @@ def authenticate(db: Session, settings: Settings, *, email: str, password: str) 
 
 
 def rotate_refresh_token(db: Session, settings: Settings, raw_refresh: str) -> IssuedTokens:
+    # O lock serializa rotações concorrentes do mesmo token (no Postgres).
     token = db.scalar(
-        select(RefreshToken).where(RefreshToken.token_hash == hash_refresh_token(raw_refresh))
+        select(RefreshToken)
+        .where(RefreshToken.token_hash == hash_refresh_token(raw_refresh))
+        .with_for_update()
     )
     if token is None:
         raise unauthorized("invalid_refresh_token", "Refresh token inválido.")
@@ -160,9 +163,9 @@ def revoke_refresh_token(db: Session, raw_refresh: str) -> None:
 def _revoke_family(db: Session, family_id: uuid.UUID) -> None:
     now = utcnow()
     tokens = db.scalars(
-        select(RefreshToken).where(
-            RefreshToken.family_id == family_id, RefreshToken.revoked_at.is_(None)
-        )
+        select(RefreshToken)
+        .where(RefreshToken.family_id == family_id, RefreshToken.revoked_at.is_(None))
+        .with_for_update()
     )
     for token in tokens:
         token.revoked_at = now

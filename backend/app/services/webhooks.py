@@ -9,12 +9,13 @@ import json
 import logging
 import random
 import secrets
+import socket
 import uuid
 from datetime import timedelta
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -46,15 +47,29 @@ class WebhookNotifier(Protocol):
     ) -> int: ...
 
 
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """Impede que um 3xx leve o POST para outro host (SSRF via redirect)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
+_OPENER = build_opener(_NoRedirectHandler)
+
+
 class HttpWebhookNotifier:
     """POST com urllib (sem dependência extra)."""
 
     def send(
         self, url: str, body: bytes, headers: dict[str, str], timeout: float
     ) -> int:
+        try:
+            validate_webhook_url(url, resolve=True)
+        except AppError as exc:
+            raise WebhookSendError("webhook_url_blocked", exc.message) from exc
         request = Request(url, data=body, headers=headers, method="POST")
         try:
-            with urlopen(request, timeout=timeout) as response:
+            with _OPENER.open(request, timeout=timeout) as response:
                 return int(response.status)
         except HTTPError as exc:
             raise WebhookSendError(
@@ -87,7 +102,18 @@ def validate_events(events: list[str]) -> list[str]:
     return normalized
 
 
-def validate_webhook_url(url: str) -> str:
+def _is_public(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return not (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_unspecified
+        or address.is_multicast
+    )
+
+
+def validate_webhook_url(url: str, *, resolve: bool = False) -> str:
     url = url.strip()
     if len(url) > 2048:
         raise AppError(422, "invalid_webhook_url", "URL do webhook é muito longa.")
@@ -106,14 +132,25 @@ def validate_webhook_url(url: str) -> str:
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
+        if not resolve:
+            return url
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        try:
+            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except OSError as exc:
+            raise AppError(
+                422,
+                "invalid_webhook_url",
+                "Não foi possível resolver o host do webhook.",
+            ) from exc
+        if any(not _is_public(ipaddress.ip_address(info[4][0])) for info in infos):
+            raise AppError(
+                422,
+                "invalid_webhook_url",
+                "O host do webhook resolve para um IP não permitido.",
+            )
         return url
-    if (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_reserved
-        or address.is_unspecified
-    ):
+    if not _is_public(address):
         raise AppError(422, "invalid_webhook_url", "IP de webhook não permitido.")
     return url
 

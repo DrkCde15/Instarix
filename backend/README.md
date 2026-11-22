@@ -37,6 +37,10 @@ uvicorn app.main:app --reload
 
 Docs interativas em `http://localhost:8000/docs`.
 
+Para desenvolvimento local, `EMBEDDED_WORKER_ENABLED=true` sobe o worker dentro
+do próprio Uvicorn, dispensando o segundo terminal. Em produção mantenha
+`false` e rode o worker separado.
+
 ### Docker
 
 ```bash
@@ -68,7 +72,10 @@ inválida e falha transitória), a fase 3 (criação/idempotência/cancelamento 
 jobs, serialização por conta, retry/backoff, recuperação pelo sweeper, cache de
 mídia/insights e download de assets) e a fase 4 (upload, publicação, proteção
 contra post ambíguo, webhooks com HMAC/retry e audit log) e a fase 5 (quotas,
-rate limit por API key, métricas, rotação de chaves e RLS opt-in).
+rate limit por API key, métricas, rotação de chaves e RLS opt-in). O teste
+`test_migrations.py` compara o schema migrado pelo Alembic com os modelos, e a
+suíte também cobre isolamento das métricas por tenant, cookie httpOnly, lock na
+rotação do refresh e bloqueio de SSRF.
 
 ## Variáveis de ambiente
 
@@ -80,6 +87,12 @@ rate limit por API key, métricas, rotação de chaves e RLS opt-in).
 | `ENVIRONMENT` | não | `dev`/`test`/`prod` |
 | `ACCESS_TOKEN_TTL_MINUTES` | não | padrão 15 |
 | `REFRESH_TOKEN_TTL_DAYS` | não | padrão 30 |
+| `AUTH_COOKIE_SECURE` | não | força `Secure` no cookie de refresh; padrão `true` em `prod` e `false` nos demais |
+| `AUTH_COOKIE_SAMESITE` | não | `lax` (padrão), `strict` ou `none` |
+| `AUTH_COOKIE_DOMAIN` | não | domínio do cookie de refresh; vazio usa o host da API |
+| `AUTH_REFRESH_COOKIE_NAME` / `AUTH_COOKIE_PATH` | não | nome e path do cookie (padrão `instarix_refresh` / `/v1/auth`) |
+| `TRUST_PROXY_HEADERS` | não | usa `X-Forwarded-For` para o IP do cliente; padrão `false`, habilite só atrás de proxy reverso controlado |
+| `PROXY_ALLOW_PRIVATE` | não | permite proxies de conta em IPs privados; padrão `false` em `prod` e `true` nos demais ambientes |
 | `REGISTRATION_ENABLED` | não | padrão `true`; desative após criar o primeiro tenant |
 | `CORS_ORIGINS` | não | lista JSON, ex. `["https://app.exemplo.com"]` |
 | `AUTH_LOGIN_LIMIT` / `AUTH_LOGIN_WINDOW_SECONDS` | não | tentativas de login por IP (padrão 10 / 5 min); `0` desativa |
@@ -88,6 +101,7 @@ rate limit por API key, métricas, rotação de chaves e RLS opt-in).
 | `AUTH_MAX_FAILED_LOGINS` / `AUTH_FAILED_LOGIN_WINDOW_SECONDS` | não | falhas por conta antes do lockout (padrão 5 / 15 min) |
 | `AUTH_LOCKOUT_SECONDS` | não | duração do lockout por conta (padrão 15 min) |
 | `JOB_WORKER_THREADS` | não | threads concorrentes do worker (padrão 2) |
+| `EMBEDDED_WORKER_ENABLED` | não | sobe o worker dentro da API; padrão `false`, use apenas em desenvolvimento |
 | `JOB_POLL_INTERVAL_SECONDS` | não | intervalo de polling quando a fila está vazia (padrão 2) |
 | `JOB_LOCK_TIMEOUT_SECONDS` | não | tempo até o sweeper considerar um job órfão (padrão 600) |
 | `JOB_BACKOFF_BASE_SECONDS` | não | base do backoff exponencial com jitter (padrão 5) |
@@ -137,7 +151,9 @@ rate limit por API key, métricas, rotação de chaves e RLS opt-in).
 | GET | `/healthz`, `/readyz` | públicas |
 
 Autenticação: `Authorization: Bearer <access_token>` ou `X-API-Key: ik_live_...`.
-Erros seguem `{"error": {"code": "...", "message": "..."}}`.
+`/v1/auth/refresh` e `/v1/auth/logout` aceitam o refresh token no corpo JSON
+(para clientes não-browser) ou no cookie httpOnly definido por `/register`,
+`/token` e `/refresh`. Erros seguem `{"error": {"code": "...", "message": "..."}}`.
 
 Contas são paginadas por cursor opaco (`?limit=50&cursor=...`); o cursor ordena
 por `created_at, id` decrescente. `DELETE /v1/accounts/{id}` é soft delete e
@@ -191,6 +207,10 @@ python -m app.workers.worker            # loop com JOB_WORKER_THREADS threads
 python -m app.workers.worker --once     # sweeper + processa a fila atual
 ```
 
+Com `EMBEDDED_WORKER_ENABLED=true`, o `uvicorn` inicia essas mesmas threads no
+startup e as encerra no shutdown. Não habilite isso em produção: o worker deve
+ser um processo separado para escalar e reiniciar independentemente da API.
+
 - `POST /v1/accounts/{id}/jobs` responde `202` com `Location`. Um
   `idempotency_key` repetido devolve o job existente com `200`.
 - `GET /v1/accounts/{id}/jobs` lista os jobs da conta com os mesmos filtros
@@ -229,7 +249,9 @@ curl -F file=@foto.jpg -H "Authorization: Bearer $TOKEN" \
 O `storage_key` retornado vai no payload de `publish.photo`, `publish.video`,
 `publish.reel`, `publish.album` ou `publish.story`. Limites: 25 MiB,
 JPEG/PNG/WebP para foto e MP4/MOV para vídeo. Thumbnail é opcional para vídeo e
-reel. O job roda no worker com a sessão da conta.
+reel. O job roda no worker com a sessão da conta. O conteúdo é validado por
+magic bytes além de extensão/`Content-Type`; um arquivo com assinatura diferente
+do tipo declarado devolve `422 invalid_upload_content`.
 
 Proteção contra post ambíguo: antes de chamar o Instagram o job grava
 `result.publish_state = "sending"`. Se a chamada falhar ou o worker morrer, o
@@ -264,7 +286,8 @@ gestão de webhook. `GET /v1/audit-logs` permite filtrar por `action`,
   com `429 api_key_rate_limited` e `Retry-After`. JWT não passa por esse limite.
 - **Métricas:** `GET /v1/metrics` (Prometheus, exige `keys:manage`) com jobs por
   tipo/status, profundidade da fila, contas por status, entregas e falhas de
-  webhook. Alertas recomendados estão em [`RUNBOOKS.md`](RUNBOOKS.md).
+  webhook, todas filtradas pelo tenant do chamador. Alertas recomendados estão
+  em [`RUNBOOKS.md`](RUNBOOKS.md).
 - **Rotação de chaves:** coloque a chave nova no início de `SECRETS_KEYS` e
   rode `python -m scripts.rotate_secrets`; o script re-cifra contas, sessões e
   segredos de webhook com a chave primária e é idempotente.
@@ -281,8 +304,11 @@ gestão de webhook. `GET /v1/audit-logs` permite filtrar por `action`,
 - Senha do Instagram, proxy e `device_settings`: Fernet com ciphertext
   prefixado pelo fingerprint da chave (`<fingerprint>:<token>`). Adicione uma
   chave nova no início de `SECRETS_KEYS` para rotacionar sem perder dados.
-- Refresh tokens são opacos e persistidos só como SHA-256; reutilizar um token
-  já rotacionado revoga a família inteira.
+- Refresh tokens são opacos e persistidos só como SHA-256. A rotação usa
+  `SELECT ... FOR UPDATE` para serializar refreshes concorrentes; reutilizar um
+  token já rotacionado revoga a família inteira. O navegador recebe o token em
+  cookie `HttpOnly` (e `Secure` fora de desenvolvimento), enquanto o access
+  token fica apenas em memória.
 - API keys no formato `ik_live_<prefix>_<secret>`, persistidas só como hash e
   limitadas por escopo (`accounts:read`, `accounts:write`, `accounts:2fa`,
   `jobs:read`, `jobs:write`, `keys:manage`).
@@ -305,6 +331,13 @@ gestão de webhook. `GET /v1/audit-logs` permite filtrar por `action`,
   status/contagem/erro.
 - Segredos nunca aparecem nas respostas: `AccountOut` expõe apenas `has_proxy`,
   `has_session` e metadados de status/erro.
+- **SSRF:** webhooks validam esquema/host, resolvem o DNS antes do envio e
+  recusam IPs privados, loopback, link-local e reservados; redirects HTTP são
+  desabilitados no cliente. Proxies de conta passam pela mesma checagem (com
+  `PROXY_ALLOW_PRIVATE` apenas para desenvolvimento).
+- **IP do cliente:** `client_ip()` usa `request.client.host` por padrão e só lê
+  `X-Forwarded-For` quando `TRUST_PROXY_HEADERS=true`, evitando que um cliente
+  falsifique o IP e burle rate limit/lockout.
 
 ## Escopo e limitações desta fase
 
@@ -333,12 +366,14 @@ gestão de webhook. `GET /v1/audit-logs` permite filtrar por `action`,
   (ou trocado para object storage).
 - Não há quota de jobs nem limite de armazenamento por tenant nesta fase.
 - Uploads são multipart direto na API, sem URL pré-assinada; o arquivo precisa
-  estar no volume compartilhado entre API e worker. A validação de conteúdo é
-  por `Content-Type`/extensão, não por inspeção profunda do arquivo.
+  estar no volume compartilhado entre API e worker. A validação combina
+  extensão, `Content-Type` e magic bytes dos formatos suportados, mas não faz
+  decodificação profunda do arquivo.
 - A entrega de webhooks é síncrona dentro do loop do worker e usa `urllib`.
-  Não há fila dedicada, dead-letter queue nem reentrega manual; endpoints
-  privados são bloqueados por validação literal de IP/host, mas DNS rebinding
-  não está coberto.
+  Não há fila dedicada, dead-letter queue nem reentrega manual. O host é
+  resolvido e validado antes de cada envio e redirects são bloqueados; resta uma
+  janela de TOCTOU entre a validação e a conexão (DNS rebinding), não coberta
+  por pinagem de IP.
 - Publicações não têm agendamento (`schedule_at`) nem reconciliação automática
   de post ambíguo; o cliente precisa confirmar na conta.
 - O rate limit por API key é em memória por processo; com várias instâncias o
@@ -356,9 +391,9 @@ gestão de webhook. `GET /v1/audit-logs` permite filtrar por `action`,
 - Rate limiting/lockout usam estado em memória **por processo**: com mais de um
   worker ou instância, o limite efetivo é multiplicado pelo número de
   processos. Para produção horizontal, troque o store por Redis mantendo a
-  interface de `AuthGuard`. O IP usado é `request.client.host`; atrás de proxy
-  reverso, habilite os proxy headers do Uvicorn para não limitar todos pelo IP
-  do proxy.
+  interface de `AuthGuard`. Por padrão o IP é `request.client.host`; atrás de
+  proxy reverso, defina `TRUST_PROXY_HEADERS=true` para usar `X-Forwarded-For`
+  (o proxy precisa sobrescrever o header, não apenas anexá-lo).
 
 ## Próximas fases
 

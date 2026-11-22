@@ -1,5 +1,7 @@
 """Métricas em formato Prometheus, calculadas a partir do banco."""
 
+import uuid
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -13,24 +15,26 @@ def _lines(name: str, help_text: str, rows, label: str) -> list[str]:
     return lines
 
 
-def collect_metrics(db: Session) -> str:
+def collect_metrics(db: Session, tenant_id: uuid.UUID) -> str:
     jobs = db.execute(
-        select(Job.type, Job.status, func.count(Job.id)).group_by(
-            Job.type, Job.status
-        )
+        select(Job.type, Job.status, func.count(Job.id))
+        .where(Job.tenant_id == tenant_id)
+        .group_by(Job.type, Job.status)
     ).all()
     queue = db.execute(
         select(Job.priority, func.count(Job.id))
-        .where(Job.status == JobStatus.QUEUED)
+        .where(Job.tenant_id == tenant_id, Job.status == JobStatus.QUEUED)
         .group_by(Job.priority)
     ).all()
     accounts = db.execute(
-        select(IgAccount.status, func.count(IgAccount.id)).group_by(IgAccount.status)
+        select(IgAccount.status, func.count(IgAccount.id))
+        .where(IgAccount.tenant_id == tenant_id)
+        .group_by(IgAccount.status)
     ).all()
     webhooks = db.execute(
-        select(WebhookDelivery.status, func.count(WebhookDelivery.id)).group_by(
-            WebhookDelivery.status
-        )
+        select(WebhookDelivery.status, func.count(WebhookDelivery.id))
+        .where(WebhookDelivery.tenant_id == tenant_id)
+        .group_by(WebhookDelivery.status)
     ).all()
 
     lines: list[str] = []

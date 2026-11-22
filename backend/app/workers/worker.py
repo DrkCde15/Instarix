@@ -357,7 +357,7 @@ def _worker_id(index: int = 0) -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{index}:{uuid.uuid4().hex[:8]}"
 
 
-def _build_worker(
+def build_worker(
     index: int, settings: Settings, cipher: Cipher, gateway: IgGateway
 ) -> JobWorker:
     return JobWorker(
@@ -391,7 +391,7 @@ def main(argv: list[str] | None = None) -> int:
     gateway = get_ig_gateway()
 
     if args.once:
-        worker = _build_worker(0, settings, cipher, gateway)
+        worker = build_worker(0, settings, cipher, gateway)
         swept = worker.sweep()
         processed = worker.run_available(limit=1000)
         delivered = worker.deliver_webhooks(limit=1000)
@@ -417,7 +417,7 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGTERM, _stop)
 
     workers = [
-        _build_worker(index, settings, cipher, gateway)
+        build_worker(index, settings, cipher, gateway)
         for index in range(threads)
     ]
     threads_handle = [

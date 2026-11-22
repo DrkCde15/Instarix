@@ -1,12 +1,21 @@
 import json
+import socket
 from datetime import timedelta
+
+import pytest
 
 from app.core.config import get_settings
 from app.core.crypto import get_cipher
+from app.core.errors import AppError
 from app.core.time import utcnow
 from app.db.models import WebhookDelivery
 from app.services.ig_gateway import IgAuthError
-from app.services.webhooks import WebhookSendError, WebhookService, sign_payload
+from app.services.webhooks import (
+    WebhookSendError,
+    WebhookService,
+    sign_payload,
+    validate_webhook_url,
+)
 from tests.helpers import bearer, create_account, register
 from tests.test_jobs import enqueue, login_account, run_next
 
@@ -65,6 +74,16 @@ def test_webhook_crud_and_tenant_isolation(client):
     deleted = client.delete(f"/v1/webhooks/{body['id']}", headers=bearer(alice))
     assert deleted.status_code == 204
     assert client.get("/v1/webhooks", headers=bearer(alice)).json() == []
+
+
+def test_webhook_send_validation_blocks_private_resolution(monkeypatch):
+    def fake_getaddrinfo(*_args, **_kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 80))]
+
+    monkeypatch.setattr("app.services.webhooks.socket.getaddrinfo", fake_getaddrinfo)
+    with pytest.raises(AppError) as exc:
+        validate_webhook_url("https://example.com/hook", resolve=True)
+    assert exc.value.code == "invalid_webhook_url"
 
 
 def test_job_event_is_delivered_with_hmac(client, worker, session_factory, ig_gateway):

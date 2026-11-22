@@ -23,6 +23,18 @@ CANONICAL_SUFFIX = {
 }
 
 
+def _matches_signature(content_type: str, data: bytes) -> bool:
+    if content_type == "image/jpeg":
+        return data.startswith(b"\xff\xd8\xff")
+    if content_type == "image/png":
+        return data.startswith(b"\x89PNG\r\n\x1a\n")
+    if content_type == "image/webp":
+        return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    if content_type in VIDEO_TYPES:
+        return len(data) >= 12 and data[4:8] == b"ftyp"
+    return False
+
+
 class UploadService:
     def __init__(self, storage: MediaStorage, settings: Settings) -> None:
         self.storage = storage
@@ -45,6 +57,12 @@ class UploadService:
             )
         if not data:
             raise AppError(422, "empty_upload", "O arquivo enviado está vazio.")
+        if not _matches_signature(content_type, data):
+            raise AppError(
+                422,
+                "invalid_upload_content",
+                "O conteúdo do arquivo não corresponde ao tipo informado.",
+            )
         if len(data) > self.settings.upload_max_bytes:
             raise AppError(
                 413,

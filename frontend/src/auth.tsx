@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { api, tokens } from "./api";
+import { api } from "./api";
 import type { Me } from "./types";
 
 interface AuthContextValue {
@@ -29,17 +29,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
-    if (!tokens.access() && !tokens.refresh()) {
-      setLoading(false);
-      return;
-    }
+    // Sem token em disco: /v1/me dispara o refresh via cookie httpOnly.
     api
       .me()
       .then((user) => {
         if (active) setMe(user);
       })
       .catch(() => {
-        tokens.clear();
+        if (active) setMe(null);
       })
       .finally(() => {
         if (active) setLoading(false);

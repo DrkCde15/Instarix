@@ -16,6 +16,9 @@ os.environ.update(
         "AUTH_REGISTER_LIMIT": "1000",
         "AUTH_REFRESH_LIMIT": "1000",
         "AUTH_MAX_FAILED_LOGINS": "1000",
+        # O .env local pode habilitar o worker embutido; testes não devem
+        # iniciar threads acessando o banco de desenvolvimento.
+        "EMBEDDED_WORKER_ENABLED": "false",
     }
 )
 

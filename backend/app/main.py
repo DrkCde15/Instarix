@@ -1,5 +1,8 @@
 """Aplicação FastAPI do backend Instarix."""
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -17,7 +20,20 @@ def create_app() -> FastAPI:
     configure_logging()
     get_cipher()  # falha cedo se SECRETS_KEYS estiver inválido
 
-    app = FastAPI(title="Instarix API", version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        # Import tardio para não carregar o instagrapi quando o worker embutido
+        # está desativado.
+        from app.workers.embedded import EmbeddedWorker
+
+        embedded_worker = EmbeddedWorker(settings)
+        embedded_worker.start()
+        try:
+            yield
+        finally:
+            embedded_worker.shutdown()
+
+    app = FastAPI(title="Instarix API", version="0.1.0", lifespan=lifespan)
 
     if settings.cors_origins:
         app.add_middleware(
