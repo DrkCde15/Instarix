@@ -23,8 +23,6 @@ const BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(
   "",
 ) ?? "";
 
-
-
 export class ApiError extends Error {
   status: number;
   code: string;
@@ -130,6 +128,7 @@ async function request<T>(
     headers: finalHeaders,
     credentials: "include",
   });
+  let sessionExpired = false;
 
   if (response.status === 401 && !skipAuth && !skipRefresh) {
     const refreshed = await refreshTokens();
@@ -147,11 +146,13 @@ async function request<T>(
       });
     } else {
       expireSession();
+      // Evita disparar o evento duas vezes no tratamento de erro abaixo.
+      sessionExpired = true;
     }
   }
 
   if (!response.ok) {
-    if (response.status === 401) expireSession();
+    if (response.status === 401 && !sessionExpired) expireSession();
     throw await parseError(response);
   }
   if (response.status === 204) return undefined as T;
