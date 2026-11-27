@@ -24,7 +24,7 @@ from app.core.config import Settings
 from app.core.crypto import Cipher
 from app.core.errors import AppError, not_found
 from app.core.time import utcnow
-from app.db.models import WebhookDelivery, WebhookEndpoint, WebhookStatus
+from app.db.models import IgAccount, WebhookDelivery, WebhookEndpoint, WebhookStatus
 
 logger = logging.getLogger(__name__)
 
@@ -258,6 +258,43 @@ def resolve_webhook_target(url: str) -> WebhookTarget:
     )
 
 
+def manychat_payload(db: Session, delivery: WebhookDelivery) -> dict[str, Any]:
+    """Converte o payload do job para o formato de webhook do ManyChat.
+
+    O payload original continua gravado em ``delivery.payload`` para auditoria;
+    aqui só montamos o corpo enviado ao endpoint do cliente.
+    """
+    data = delivery.payload or {}
+    account_id = data.get("account_id")
+    account: IgAccount | None = None
+    if account_id:
+        try:
+            account = db.scalar(
+                select(IgAccount).where(
+                    IgAccount.id == uuid.UUID(str(account_id)),
+                    IgAccount.tenant_id == delivery.tenant_id,
+                    IgAccount.deleted_at.is_(None),
+                )
+            )
+        except (ValueError, TypeError, AttributeError):
+            account = None
+
+    return {
+        "subscriber_id": str(account_id or ""),
+        "channel": "INSTAGRAM",
+        "name": account.label if account else str(account_id or ""),
+        "username": account.username if account else "",
+        "event": delivery.event,
+        "custom_fields": {
+            "job_id": data.get("job_id"),
+            "account_id": account_id,
+            "type": data.get("type"),
+            "status": data.get("status"),
+            "error_code": data.get("error_code"),
+        },
+    }
+
+
 class WebhookService:
     def __init__(self, db: Session, cipher: Cipher, settings: Settings) -> None:
         self.db = db
@@ -413,7 +450,10 @@ class WebhookService:
             return
 
         body = json.dumps(
-            delivery.payload, separators=(",", ":"), sort_keys=True, default=str
+            manychat_payload(self.db, delivery),
+            separators=(",", ":"),
+            sort_keys=True,
+            default=str,
         ).encode()
         timestamp = str(int(utcnow().timestamp()))
         headers = {

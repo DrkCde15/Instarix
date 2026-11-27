@@ -198,7 +198,14 @@ def test_job_event_is_delivered_with_hmac(client, worker, session_factory, ig_ga
         endpoint["secret"], headers["X-Instarix-Timestamp"], call["body"]
     )
     assert headers["X-Instarix-Signature"] == f"sha256={expected}"
-    assert json.loads(call["body"]) == delivery["payload"]
+    sent = json.loads(call["body"])
+    assert sent["event"] == "job.succeeded"
+    assert sent["channel"] == "INSTAGRAM"
+    assert sent["subscriber_id"] == account["id"]
+    assert sent["name"] == account["label"]
+    assert sent["username"] == account["username"]
+    assert sent["custom_fields"]["job_id"] == job["id"]
+    assert sent["custom_fields"]["type"] == "media.list"
 
     after = client.get(
         f"/v1/webhooks/{endpoint['id']}/deliveries", headers=bearer(tokens)
