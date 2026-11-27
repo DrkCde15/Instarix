@@ -47,6 +47,12 @@ def test_upload_saves_file_and_validates_type(client, media_storage):
     assert spoofed.status_code == 422
     assert spoofed.json()["error"]["code"] == "invalid_upload_content"
 
+    # A extensão salva vem do tipo validado, não do nome enviado.
+    renamed = upload(
+        client, tokens, filename="foto.exe", kind="image/png", content=fake_media("image/png")
+    ).json()
+    assert renamed["storage_key"].endswith(".png")
+
 
 def test_publish_photo_uses_uploaded_file(client, worker, ig_gateway):
     tokens = register(client)

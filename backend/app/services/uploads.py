@@ -6,7 +6,6 @@ job recebe apenas o ``storage_key``.
 """
 
 import uuid
-from pathlib import Path
 
 from app.core.config import Settings
 from app.core.errors import AppError
@@ -57,24 +56,21 @@ class UploadService:
             )
         if not data:
             raise AppError(422, "empty_upload", "O arquivo enviado está vazio.")
-        if not _matches_signature(content_type, data):
-            raise AppError(
-                422,
-                "invalid_upload_content",
-                "O conteúdo do arquivo não corresponde ao tipo informado.",
-            )
         if len(data) > self.settings.upload_max_bytes:
             raise AppError(
                 413,
                 "upload_too_large",
                 f"O arquivo excede o limite de {self.settings.upload_max_bytes} bytes.",
             )
+        if not _matches_signature(content_type, data):
+            raise AppError(
+                422,
+                "invalid_upload_content",
+                "O conteúdo do arquivo não corresponde ao tipo informado.",
+            )
 
-        suffix = Path(filename or "").suffix.lower()
-        if content_type in IMAGE_TYPES and suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
-            suffix = CANONICAL_SUFFIX[content_type]
-        if content_type in VIDEO_TYPES and suffix not in {".mp4", ".mov"}:
-            suffix = CANONICAL_SUFFIX[content_type]
+        # A extensão vem do tipo validado, nunca do nome enviado pelo cliente.
+        suffix = CANONICAL_SUFFIX[content_type]
 
         key = f"uploads/{tenant_id}/{uuid.uuid4().hex}{suffix}"
         size = self.storage.save_bytes(data, key)

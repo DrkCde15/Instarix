@@ -85,6 +85,9 @@ def test_media_download_creates_asset_and_serves_file(
     assert download.status_code == 200, download.text
     assert download.content == b"conteudo-photo"
     assert download.headers["content-type"] == "image/jpeg"
+    assert download.headers["x-content-type-options"] == "nosniff"
+    assert download.headers["cache-control"] == "private, no-store"
+    assert "attachment" in download.headers["content-disposition"]
 
     # Reenfileirar a mesma mídia não baixa de novo.
     enqueue(

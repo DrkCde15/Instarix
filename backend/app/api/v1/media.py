@@ -44,6 +44,12 @@ def download_media(
         path,
         media_type=asset.content_type,
         filename=f"{asset.media_pk}_{asset.kind}{path.suffix}",
+        # Conteúdo privado do tenant: sem cache compartilhado e sem sniffing
+        # de MIME pelo navegador.
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
     )
 
 
