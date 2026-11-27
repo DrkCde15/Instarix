@@ -99,6 +99,7 @@ rotação do refresh e bloqueio de SSRF.
 | `PROXY_ALLOW_PRIVATE` | não | permite proxies de conta em IPs privados; padrão `false` em `prod` e `true` nos demais ambientes |
 | `REGISTRATION_ENABLED` | não | padrão `true`; desative após criar o primeiro tenant |
 | `CORS_ORIGINS` | não | lista JSON de origens exatas, ex. `["https://app.exemplo.com"]`; `*` é recusado |
+| `RATE_LIMIT_BACKEND` | não | `memory` (padrão, por processo) ou `redis` (janelas e lockout compartilhados entre workers) |
 | `AUTH_LOGIN_LIMIT` / `AUTH_LOGIN_WINDOW_SECONDS` | não | tentativas de login por IP (padrão 10 / 5 min); `0` desativa |
 | `AUTH_REGISTER_LIMIT` / `AUTH_REGISTER_WINDOW_SECONDS` | não | cadastros por IP (padrão 5 / 1 h) |
 | `AUTH_REFRESH_LIMIT` / `AUTH_REFRESH_WINDOW_SECONDS` | não | refresh por IP (padrão 30 / 5 min) |
@@ -118,7 +119,7 @@ rotação do refresh e bloqueio de SSRF.
 | `QUOTA_FREE_ACCOUNTS` / `QUOTA_FREE_JOBS_PER_DAY` | não | quota do plano free (padrão 3 / 100) |
 | `QUOTA_PRO_ACCOUNTS` / `QUOTA_PRO_JOBS_PER_DAY` | não | quota do plano pro (padrão 25 / 5000) |
 | `RLS_ENABLED` | não | ativa o contexto de RLS na API; padrão `false` |
-| `REDIS_URL` | não | reservado; a fila atual usa apenas o PostgreSQL |
+| `REDIS_URL` | não | usado por `RATE_LIMIT_BACKEND=redis`; a fila de jobs continua apenas no PostgreSQL |
 
 ## API (v1)
 
@@ -147,6 +148,11 @@ rotação do refresh e bloqueio de SSRF.
 | GET/POST | `/v1/webhooks` | `webhooks:read` / `webhooks:write` |
 | DELETE | `/v1/webhooks/{id}` | `webhooks:write` |
 | GET | `/v1/webhooks/{id}/deliveries` | `webhooks:read` |
+| GET/POST | `/v1/flows` | `jobs:read` / `jobs:write` |
+| GET/PATCH/DELETE | `/v1/flows/{id}` | `jobs:read` / `jobs:write` |
+| POST | `/v1/flows/{id}/run` | `jobs:write` |
+| GET | `/v1/flows/{id}/runs` | `jobs:read` |
+| GET | `/v1/flows/summary` | `jobs:read` |
 | GET | `/v1/audit-logs` | `audit:read` |
 | GET | `/v1/metrics` | `keys:manage` |
 | GET | `/v1/usage` | `accounts:read` |
@@ -208,7 +214,7 @@ Tipos aceitos: `media.list`, `media.download`, `insights.account` e
 ```bash
 cd backend
 python -m app.workers.worker            # loop com JOB_WORKER_THREADS threads
-python -m app.workers.worker --once     # sweeper + processa a fila atual
+python -m app.workers.worker --once     # recupera locks + sweeper + fila atual
 ```
 
 Com `EMBEDDED_WORKER_ENABLED=true`, o `uvicorn` inicia essas mesmas threads no
@@ -224,9 +230,11 @@ ser um processo separado para escalar e reiniciar independentemente da API.
 - `attempts` sobe no claim. Erros transitórios (`instagram_unavailable`) voltam
   para `queued` com backoff exponencial + jitter, até `max_attempts` (3).
   Sessão recusada/challenge/payload inválido são terminais.
-- O sweeper recicla jobs `running` com `locked_at` mais antigo que
-  `JOB_LOCK_TIMEOUT_SECONDS` se ainda houver tentativas; senão marca `failed`
-  com `job_worker_lost`.
+- Na inicialização, o worker recupera sem espera os jobs `running` cujo dono do
+  lock (`host:pid:...`) não é um processo ativo no mesmo host. Para locks de
+  outros hosts ou formatos desconhecidos, o sweeper recicla após
+  `JOB_LOCK_TIMEOUT_SECONDS`. Em ambos os casos o job volta para `queued` se
+  ainda houver tentativas, senão vira `failed` com `job_worker_lost`.
 - `GET /v1/accounts/{id}/media` devolve o último `media.list` bem-sucedido ou
   `409 media_not_cached`.
 - `media.download` grava o arquivo no storage local e cria `media_assets`;
@@ -270,10 +278,39 @@ Webhooks:
 - Cada entrega é um POST JSON com `X-Instarix-Event`, `X-Instarix-Delivery`,
   `X-Instarix-Timestamp` e `X-Instarix-Signature: sha256=<hmac>`; o HMAC cobre
   `timestamp.body`, no mesmo formato de Stripe.
+- O corpo segue o formato de webhook do ManyChat: `subscriber_id`, `channel`,
+  `name`, `username`, `event` e `custom_fields` com `job_id`/`type`/`status`/
+  `error_code`. O payload original permanece em `delivery.payload` para auditoria.
 - Falhas de rede/HTTP são repetidas com backoff exponencial até
   `WEBHOOK_MAX_ATTEMPTS`; o histórico fica em
   `GET /v1/webhooks/{id}/deliveries`.
 - O worker entrega webhooks pendentes no mesmo loop (e no `--once`).
+- Exemplo de receptor com validação de assinatura e do timestamp:
+  `examples/verify_webhook.py` (use `--selftest` para testar sem rede).
+
+Fluxos de automação (MVP):
+
+- `POST /v1/flows` salva `name`, `description`, `category` (padrão `geral`) e
+  o grafo `{nodes, edges}`.
+- `GET /v1/flows/summary` agrega contagens, taxa de sucesso, últimas execuções,
+  fluxos mais usados e série de 14 dias — tudo derivado de `FlowRun`.
+- Tipos de nó:
+  `trigger.manual`, `condition.keyword`, `action.reply_dm`,
+  `action.reply_comment`, `action.publish` e `action.schedule_publish`.
+  Os nós de publicação aceitam `run_after` (ISO 8601); o worker só executa o
+  job quando esse horário chega.
+- O fluxo pode ter `trigger_source` `manual`, `dm` ou `comment`. Nos dois
+  últimos, escolha `account_id` e `poll_interval_seconds` (5–3600 s).
+- O worker consulta DMs (`direct_threads`) ou comentários recentes
+  (`user_medias` + `media_comments`) no intervalo configurado, deduplica por
+  `last_seen_id` e enfileira um job `flow.event` por mensagem/comentário novo.
+- `action.reply_dm` chama `direct_answer` e `action.reply_comment` chama
+  `media_comment(replied_to_comment_id=...)` quando há `thread_id`/`comment_id`
+  no contexto. No teste manual (sem esses IDs) a resposta continua simulada.
+- `action.publish` cria um job real com chave de idempotência por execução.
+- Cada execução vira um `FlowRun` com `steps`, status e erro;
+  `GET /v1/flows/{id}/runs` mostra o histórico. Gerenciamento usa os escopos
+  `jobs:read`/`jobs:write`.
 
 Ações sensíveis geram `audit_logs` sem segredos: criação/atualização/exclusão de
 conta, login/2FA/logout, criação/revogação de API key, criação de job e
@@ -387,11 +424,13 @@ gestão de webhook. `GET /v1/audit-logs` permite filtrar por `action`,
   reentrega manual. O IP pinado cobre o DNS rebinding, mas a conexão ainda é
   feita sem `happy eyeballs`/IPv6-first: usa o primeiro endereço global
   resolvido.
-- Publicações não têm agendamento (`schedule_at`) nem reconciliação automática
-  de post ambíguo; o cliente precisa confirmar na conta.
-- O rate limit por API key é em memória por processo; com várias instâncias o
-  limite efetivo é multiplicado. Quotas são verificadas por leitura + escrita,
-  então duas requisições concorrentes podem passar do limite por uma unidade.
+- Publicações avulsas e fluxos podem ser agendados com `run_after` (data/hora
+  única); não há recorrência tipo cron nem reconciliação automática de post
+  ambíguo — o cliente precisa confirmar na conta.
+- Com `RATE_LIMIT_BACKEND=memory` (padrão), o rate limit por API key é por
+  processo; use `redis` com várias instâncias. Quotas são verificadas por
+  leitura + escrita, então duas requisições concorrentes podem passar do limite
+  por uma unidade.
 - RLS é opt-in e exige PostgreSQL, policies aplicadas e role de worker com
   `BYPASSRLS`; não é exercitado no SQLite dos testes. As consultas da aplicação
   já filtram `tenant_id` mesmo sem RLS.
@@ -401,15 +440,16 @@ gestão de webhook. `GET /v1/audit-logs` permite filtrar por `action`,
 - `alembic check` no SQLite avisa que índices de expressão
   (`lower(email)`, `lower(username)`) não são refletidos; são criados
   explicitamente pela migration e funcionam no Postgres.
-- Rate limiting/lockout usam estado em memória **por processo**: com mais de um
-  worker ou instância, o limite efetivo é multiplicado pelo número de
-  processos. Para produção horizontal, troque o store por Redis mantendo a
-  interface de `AuthGuard`. Por padrão o IP é `request.client.host`; atrás de
-  proxy reverso, defina `TRUST_PROXY_HEADERS=true` para usar `X-Forwarded-For`
-  (o proxy precisa sobrescrever o header, não apenas anexá-lo).
+- Rate limiting/lockout usam estado em memória **por processo** por padrão;
+  defina `RATE_LIMIT_BACKEND=redis` para compartilhar janelas e lockout entre
+  workers. Se o Redis estiver indisponível nesse modo, as rotas protegidas
+  respondem `503` em vez de aceitar requisições sem limite. Por padrão o IP é
+  `request.client.host`; atrás de proxy reverso, defina
+  `TRUST_PROXY_HEADERS=true` para usar `X-Forwarded-For` (o proxy precisa
+  sobrescrever o header, não apenas anexá-lo).
 
 ## Próximas fases
 
-6. S3/MinIO com uploads pré-assinados, agendamento de publicação e
+6. S3/MinIO com uploads pré-assinados, agendamento recorrente (cron) e
    reconciliação de post ambíguo.
-7. Alertas externos (Prometheus/Sentry) e rate limit distribuído em Redis.
+7. Alertas externos (Prometheus/Sentry) e fila de jobs em Redis.

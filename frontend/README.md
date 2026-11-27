@@ -2,12 +2,14 @@
 
 SPA do painel multi-tenant do Instarix, consumindo a API FastAPI em `../backend`.
 Cobre autenticação, contas do Instagram (login, 2FA, sessão e histórico), fila de
-jobs, publicação, webhooks, auditoria e configurações (uso, API keys e métricas).
+jobs, publicação, automações com editor visual, auditoria e configurações (uso,
+API keys e métricas).
 
 ## Stack
 
 - React 19 + TypeScript
 - Vite 6 + React Router 7
+- `@xyflow/react` para o editor de fluxos
 - `lucide-react` para ícones
 - CSS próprio, sem framework de UI
 
@@ -55,16 +57,24 @@ npm run preview    # serve o build localmente
 
 | Rota | Tela |
 |---|---|
-| `/` | Visão geral: contas, fila recente e pontos de atenção |
+| `/` | Redireciona para `/flows` (editor visual, tela inicial) |
+| `/flows` | Construtor de fluxos: canvas, nós categorizados e configuração |
+| `/dashboard` | Métricas de automações, gráfico de atividade e estado da operação |
+| `/automations` | Lista de automações com busca, filtros e ações |
+| `/analytics` | Histórico e indicadores de execuções |
+| `/integrations` | Chaves de API e entrega de eventos |
 | `/accounts` | Lista/criação de contas, com busca |
 | `/accounts/:id` | Detalhe: login, 2FA, health, logout, mídia, insights, jobs e histórico |
 | `/jobs` | Fila global com filtros, paginação e detalhes |
-| `/publish` | Upload e enfileiramento de foto, vídeo, reel, álbum e story |
-| `/webhooks` | CRUD de endpoints, segredo único e entregas |
+| `/publish` | Upload, publicação e agendamento de mídia |
 | `/audit` | Audit log com filtro por `action` |
 | `/settings` | Plano/uso, API keys e métricas Prometheus |
 
-Rotas desconhecidas redirecionam para `/`. Em produção, configure o servidor
+A sidebar agrupa as telas em Principal, Operação e Sistema, pode ser recolhida
+no desktop e mantém a preferência em `localStorage`. Conversas, Contatos e
+Campanhas aparecem como "em breve": não há dados reais para eles ainda.
+
+Rotas desconhecidas redirecionam para `/flows`. Em produção, configure o servidor
 estático com fallback para `index.html` (SPA).
 
 ## Autenticação
