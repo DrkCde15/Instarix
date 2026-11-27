@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parents[2]
@@ -110,6 +110,27 @@ class Settings(BaseSettings):
         if not value.strip():
             raise ValueError("SECRETS_KEYS não pode ser vazio")
         return value
+
+    @field_validator("cors_origins")
+    @classmethod
+    def _cors_origins_explicit(cls, value: list[str]) -> list[str]:
+        # Com cookies de sessão o CORS usa credenciais; curinga é inválido e
+        # transformaria qualquer site em origem confiável.
+        if "*" in value:
+            raise ValueError(
+                "CORS_ORIGINS não aceita '*'; liste as origens exatas do frontend"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _cookie_flags_consistent(self) -> "Settings":
+        # SameSite=None só é aceito por navegadores com Secure; sem isso o
+        # cookie seria descartado ou trafegaria sem proteção.
+        if self.auth_cookie_samesite == "none" and not self.cookie_secure:
+            raise ValueError(
+                "AUTH_COOKIE_SAMESITE=none exige AUTH_COOKIE_SECURE=true"
+            )
+        return self
 
     @property
     def secret_key_list(self) -> list[str]:

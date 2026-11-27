@@ -1,3 +1,7 @@
+import pytest
+from pydantic import ValidationError
+
+from app.core.config import Settings
 from app.core.security import hash_refresh_token
 from app.db.models import RefreshToken, User
 from tests.helpers import bearer, register
@@ -99,6 +103,69 @@ def test_refresh_and_logout_use_httponly_cookie(client):
 
     assert client.post("/v1/auth/logout").status_code == 204
     assert client.post("/v1/auth/refresh").status_code == 401
+
+
+def test_refresh_with_cookie_rejects_cross_site_origin(client):
+    tokens = register(client)
+
+    # Token no corpo é um cliente não-browser: passa da checagem de CSRF.
+    body_token = client.post(
+        "/v1/auth/refresh",
+        json={"refresh_token": tokens["refresh_token"]},
+        headers={"Origin": "https://evil.example"},
+    )
+    assert body_token.status_code == 200, body_token.text
+
+    blocked = client.post(
+        "/v1/auth/refresh", headers={"Origin": "https://evil.example"}
+    )
+    assert blocked.status_code == 403
+    assert blocked.json()["error"]["code"] == "csrf_origin_rejected"
+
+    same_origin = client.post(
+        "/v1/auth/refresh", headers={"Origin": "http://testserver"}
+    )
+    assert same_origin.status_code == 200, same_origin.text
+
+
+def test_cookie_refresh_allows_loopback_dev_proxy(client):
+    register(client)
+    # O proxy do Vite reescreve o Host, mas origem e destino são loopback.
+    response = client.post(
+        "/v1/auth/refresh",
+        headers={"Origin": "http://localhost:5173", "Host": "localhost:8000"},
+    )
+    assert response.status_code == 200, response.text
+
+
+def test_token_responses_are_not_cacheable(client):
+    created = client.post(
+        "/v1/auth/register",
+        json={
+            "tenant_name": "Cache Co",
+            "email": "cache@example.com",
+            "password": "senha-forte-123",
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"auth_cookie_samesite": "none", "auth_cookie_secure": False},
+        {"cors_origins": ["*"]},
+    ],
+)
+def test_insecure_cookie_and_cors_settings_are_rejected(overrides):
+    base = {
+        "jwt_secret": "test-secret-" + "x" * 40,
+        "secrets_keys": "chave-de-teste",
+        "environment": "dev",
+    }
+    with pytest.raises(ValidationError):
+        Settings(**base, **overrides)
 
 
 def test_logout_revokes_refresh_token(client):
