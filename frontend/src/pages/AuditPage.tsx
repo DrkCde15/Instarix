@@ -4,7 +4,12 @@ import { api, ApiError } from "../api";
 import { EmptyState, JsonBlock, PageHeader, Spinner } from "../components/ui";
 import { useToast } from "../toast";
 import type { Account, AuditLog } from "../types";
-import { formatDate, formatShortDate, jsonPreview } from "../utils";
+import {
+  auditActionLabel,
+  formatDate,
+  formatShortDate,
+  jsonPreview,
+} from "../utils";
 
 export function AuditPage() {
   const { notify } = useToast();
@@ -64,7 +69,7 @@ export function AuditPage() {
       <PageHeader
         eyebrow="Governança"
         title="Auditoria"
-        description="Ações sensíveis do workspace, sem senhas, códigos ou sessões."
+        description="Ações importantes da sua conta, sem senhas, códigos ou sessões."
         actions={
           <button
             type="button"
@@ -83,7 +88,7 @@ export function AuditPage() {
           <input
             value={action}
             onChange={(event) => setAction(event.target.value)}
-            placeholder="Filtrar por action (ex.: account.created)"
+            placeholder="Filtrar por ação (ex.: account.created)"
             onKeyDown={(event) => {
               if (event.key === "Enter") setAppliedAction(action.trim());
             }}
@@ -116,7 +121,7 @@ export function AuditPage() {
         <EmptyState
           icon={ScrollText}
           title="Nenhum registro"
-          description="Crie uma conta, job ou webhook para gerar eventos de auditoria."
+          description="Conecte uma conta ou crie uma integração para ver os registros aqui."
         />
       ) : (
         <>
@@ -184,7 +189,9 @@ function LogRow({
     <>
       <tr className="job-row" onClick={onToggle}>
         <td>
-          <code className="action-code">{log.action}</code>
+          <code className="action-code" title={log.action}>
+            {auditActionLabel(log.action)}
+          </code>
           <small className="job-id">{formatShortDate(log.created_at)}</small>
         </td>
         <td>{account ? `@${account.username}` : "—"}</td>

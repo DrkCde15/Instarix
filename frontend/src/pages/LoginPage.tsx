@@ -49,32 +49,32 @@ export function LoginPage() {
           <span>Instarix</span>
         </div>
         <div className="auth-copy">
-          <span className="eyebrow">Instagram operations, organized</span>
+          <span className="eyebrow">Suas contas do Instagram, em um só lugar</span>
           <h1>
             Todas as suas contas.
             <br />
             <em>Um só controle.</em>
           </h1>
           <p>
-            Login com 2FA, leitura de mídia, publicação e insights em uma fila
-            serializada por conta. Sem planilhas, sem sessões soltas.
+            Conecte seus perfis, acompanhe publicações e veja o que precisa de
+            atenção. Sem planilhas, sem sessões soltas.
           </p>
           <ul className="auth-features">
             <li>
               <ShieldCheck size={17} />
-              Credenciais e sessões cifradas
+              Senhas e sessões protegidas
             </li>
             <li>
               <Radio size={17} />
-              Fila por conta com retry e recuperação
+              Publicações organizadas por conta
             </li>
             <li>
               <KeyRound size={17} />
-              API keys, webhooks e audit log
+              Integrações e histórico de ações
             </li>
           </ul>
         </div>
-        <span className="auth-foot">Instarix API · v0.1</span>
+        <span className="auth-foot">Instarix</span>
       </div>
 
       <div className="auth-panel">
@@ -107,14 +107,14 @@ export function LoginPage() {
             <p>
               {mode === "login"
                 ? "Use seu email e senha para acessar o painel."
-                : "Crie seu workspace e conecte a primeira conta do Instagram."}
+                : "Crie sua conta e conecte o primeiro perfil do Instagram."}
             </p>
           </div>
 
           <form onSubmit={onSubmit} className="stack">
             {mode === "register" && (
               <label className="field">
-                <span>Nome do workspace</span>
+                <span>Nome da empresa</span>
                 <input
                   value={tenantName}
                   onChange={(event) => setTenantName(event.target.value)}
@@ -162,14 +162,14 @@ export function LoginPage() {
                 ? "Conectando…"
                 : mode === "login"
                   ? "Entrar no painel"
-                  : "Criar workspace"}
+                  : "Criar conta"}
               {!submitting && <ArrowRight size={16} />}
             </button>
           </form>
 
           <p className="auth-note">
-            A API privada do Instagram pode exigir verificação manual. O painel
-            mostra o estado de cada conta e nunca expõe senhas ou sessões.
+            O Instagram pode pedir uma verificação extra. O painel avisa quando
+            isso acontece e nunca mostra suas senhas.
           </p>
         </div>
       </div>

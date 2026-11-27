@@ -20,16 +20,20 @@ import type { ApiKey, Usage } from "../types";
 import { formatDate, formatShortDate } from "../utils";
 
 const SCOPES = [
-  "accounts:read",
-  "accounts:write",
-  "accounts:2fa",
-  "jobs:read",
-  "jobs:write",
-  "keys:manage",
-  "webhooks:read",
-  "webhooks:write",
-  "audit:read",
+  { value: "accounts:read", label: "Ver contas" },
+  { value: "accounts:write", label: "Alterar contas" },
+  { value: "accounts:2fa", label: "Confirmar código 2FA" },
+  { value: "jobs:read", label: "Ver tarefas" },
+  { value: "jobs:write", label: "Criar tarefas" },
+  { value: "keys:manage", label: "Gerenciar chaves" },
+  { value: "webhooks:read", label: "Ver integrações" },
+  { value: "webhooks:write", label: "Gerenciar integrações" },
+  { value: "audit:read", label: "Ver histórico" },
 ];
+
+function scopeLabel(value: string): string {
+  return SCOPES.find((item) => item.value === value)?.label ?? value;
+}
 
 export function SettingsPage() {
   const { notify } = useToast();
@@ -89,11 +93,11 @@ export function SettingsPage() {
       });
       setCreatedKey(created.key);
       setKeyName("");
-      notify("API key criada. Copie a chave agora.", "success");
+      notify("Chave criada. Copie o valor agora.", "success");
       await load();
     } catch (err) {
       setError(
-        err instanceof ApiError ? err.message : "Não foi possível criar a API key.",
+        err instanceof ApiError ? err.message : "Não foi possível criar a chave.",
       );
     } finally {
       setCreating(false);
@@ -101,14 +105,14 @@ export function SettingsPage() {
   }
 
   async function revoke(key: ApiKey) {
-    if (!window.confirm(`Revogar a API key "${key.name}"?`)) return;
+    if (!window.confirm(`Revogar a chave "${key.name}"?`)) return;
     try {
       await api.revokeApiKey(key.id);
-      notify("API key revogada.", "success");
+      notify("Chave revogada.", "success");
       await load();
     } catch (err) {
       notify(
-        err instanceof ApiError ? err.message : "Falha ao revogar API key.",
+        err instanceof ApiError ? err.message : "Falha ao revogar a chave.",
         "error",
       );
     }
@@ -121,7 +125,7 @@ export function SettingsPage() {
       setMetrics(await api.metricsText());
     } catch (err) {
       setError(
-        err instanceof ApiError ? err.message : "Falha ao carregar métricas.",
+        err instanceof ApiError ? err.message : "Falha ao carregar os indicadores.",
       );
     } finally {
       setMetricsLoading(false);
@@ -135,7 +139,7 @@ export function SettingsPage() {
       <PageHeader
         eyebrow="Workspace"
         title="Configurações"
-        description="Plano, uso, chaves de API e métricas operacionais."
+        description="Plano, uso, chaves de acesso e indicadores da operação."
       />
 
       {error && <div className="error-banner">{error}</div>}
@@ -145,21 +149,21 @@ export function SettingsPage() {
           <StatCard
             label="Plano"
             value={usage.plan}
-            hint="limites definidos no backend"
+            hint="limites do seu plano"
             icon={Activity}
             accent="teal"
           />
           <StatCard
             label="Contas"
             value={`${usage.accounts_used}/${usage.accounts_limit || "∞"}`}
-            hint="contas ativas no tenant"
+            hint="contas conectadas"
             icon={Activity}
             accent="violet"
           />
           <StatCard
-            label="Jobs hoje"
+            label="Tarefas hoje"
             value={`${usage.jobs_today_used}/${usage.jobs_today_limit || "∞"}`}
-            hint="janela diária em UTC"
+            hint="renovado a cada dia"
             icon={BarChart3}
             accent="amber"
           />
@@ -169,15 +173,15 @@ export function SettingsPage() {
       <section className="panel">
         <div className="panel-header">
           <div>
-            <h2>API keys</h2>
-            <p>Use no header X-API-Key. O valor completo aparece só na criação.</p>
+            <h2>Chaves de acesso</h2>
+            <p>Use para conectar outros sistemas. Copie o valor agora: ele não aparecerá novamente.</p>
           </div>
         </div>
 
         {createdKey && (
           <div className="secret-banner inline-secret">
             <div>
-              <strong>Nova API key</strong>
+              <strong>Nova chave de acesso</strong>
               <code>{createdKey}</code>
             </div>
             <div className="inline-actions">
@@ -207,27 +211,30 @@ export function SettingsPage() {
             <span>Escopos</span>
             <div className="scope-grid">
               {SCOPES.map((scope) => (
-                <label key={scope} className="checkbox-row">
+                <label key={scope.value} className="checkbox-row">
                   <input
                     type="checkbox"
-                    checked={scopes.includes(scope)}
-                    onChange={() => toggleScope(scope)}
+                    checked={scopes.includes(scope.value)}
+                    onChange={() => toggleScope(scope.value)}
                   />
-                  <code>{scope}</code>
+                  <span>
+                    <strong>{scope.label}</strong>
+                    <code>{scope.value}</code>
+                  </span>
                 </label>
               ))}
             </div>
           </div>
           <button type="submit" className="button button-primary" disabled={creating}>
             <Plus size={15} />
-            {creating ? "Criando…" : "Criar API key"}
+            {creating ? "Criando…" : "Criar chave"}
           </button>
         </form>
 
         {keys.length === 0 ? (
           <EmptyState
             icon={KeyRound}
-            title="Nenhuma API key"
+            title="Nenhuma chave de acesso"
             description="Crie uma chave com escopos mínimos para integrar serviços."
           />
         ) : (
@@ -258,7 +265,9 @@ export function SettingsPage() {
                     <td>
                       <div className="event-chips">
                         {key.scopes.map((scope) => (
-                          <span key={scope}>{scope}</span>
+                          <span key={scope} title={scope}>
+                            {scopeLabel(scope)}
+                          </span>
                         ))}
                       </div>
                     </td>
@@ -270,7 +279,7 @@ export function SettingsPage() {
                           type="button"
                           className="icon-button icon-danger"
                           onClick={() => void revoke(key)}
-                          aria-label="Revogar API key"
+                          aria-label="Revogar chave"
                         >
                           <Trash2 size={15} />
                         </button>
@@ -287,8 +296,8 @@ export function SettingsPage() {
       <section className="panel">
         <div className="panel-header">
           <div>
-            <h2>Métricas</h2>
-            <p>Snapshot Prometheus do banco, calculado na hora.</p>
+            <h2>Indicadores</h2>
+            <p>Números da operação, calculados na hora.</p>
           </div>
           <button
             type="button"
@@ -297,15 +306,15 @@ export function SettingsPage() {
             disabled={metricsLoading}
           >
             <RefreshCw size={15} className={metricsLoading ? "spin" : ""} />
-            Carregar métricas
+            Carregar indicadores
           </button>
         </div>
         {metrics ? (
           <pre className="json-block metrics-block">{metrics}</pre>
         ) : (
           <p className="muted">
-            Requer permissão <code>keys:manage</code>. Clique em carregar para
-            consultar <code>/v1/metrics</code>.
+            Disponível para quem pode gerenciar chaves. Clique em carregar para
+            ver os indicadores.
           </p>
         )}
       </section>

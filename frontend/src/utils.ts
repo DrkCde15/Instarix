@@ -70,6 +70,65 @@ export function jobStatusLabel(status: JobStatus | string): string {
   );
 }
 
+export function roleLabel(role: string | null | undefined): string {
+  return (
+    {
+      owner: "Proprietário",
+      admin: "Administrador",
+      operator: "Operador",
+      viewer: "Leitor",
+    }[role ?? ""] ?? role ?? "—"
+  );
+}
+
+export function accountErrorLabel(code: string | null | undefined): string {
+  if (!code) return "Última falha registrada";
+  return (
+    {
+      challenge_required: "Verificação necessária",
+      needs_reauth: "É preciso entrar novamente",
+      "2fa_required": "Código de verificação pendente",
+      invalid_credentials: "Senha incorreta",
+      bad_password: "Senha incorreta",
+      proxy_error: "Proxy indisponível",
+      rate_limit: "O Instagram limitou o acesso",
+    }[code] ?? "Última falha registrada"
+  );
+}
+
+export function loginAttemptStatusLabel(status: string): string {
+  return (
+    {
+      pending: "Pendente",
+      running: "Em andamento",
+      success: "Concluído",
+      succeeded: "Concluído",
+      failed: "Falhou",
+      canceled: "Cancelado",
+      "2fa_required": "Aguardando código",
+      challenge_required: "Verificação necessária",
+    }[status] ?? status.replaceAll("_", " ")
+  );
+}
+
+export function auditActionLabel(action: string): string {
+  return (
+    {
+      "account.created": "Conta conectada",
+      "account.updated": "Conta alterada",
+      "account.deleted": "Conta removida",
+      "account.login": "Login realizado",
+      "account.logout": "Sessão encerrada",
+      "account.2fa": "Código confirmado",
+      "job.created": "Tarefa criada",
+      "webhook.created": "Integração criada",
+      "webhook.deleted": "Integração removida",
+      "api_key.created": "Chave de API criada",
+      "api_key.revoked": "Chave de API revogada",
+    }[action] ?? action
+  );
+}
+
 export function jobTypeLabel(type: string): string {
   return (
     {
@@ -106,6 +165,30 @@ export function truncate(value: string, length = 90): string {
 
 export function isVideoContentType(contentType: string): boolean {
   return contentType.startsWith("video/");
+}
+
+/** Chave aleatória para idempotência, inclusive fora de contexto seguro. */
+export function randomIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export interface IdempotencyState {
+  fingerprint: string;
+  key: string;
+}
+
+/** Reusa a chave do mesmo rascunho e gera outra quando o rascunho muda. */
+export function idempotencyKeyFor(
+  current: IdempotencyState | null,
+  fingerprint: string,
+): IdempotencyState {
+  if (current && current.fingerprint === fingerprint) return current;
+  return { fingerprint, key: randomIdempotencyKey() };
 }
 
 export async function copyText(value: string): Promise<void> {

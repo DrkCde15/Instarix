@@ -149,7 +149,7 @@ export function AccountsPage() {
           description={
             accounts.length
               ? "Tente outro termo de busca."
-              : "Crie a primeira conta para fazer login e operar pelo backend."
+              : "Conecte a primeira conta para começar a usar o painel."
           }
           action={
             !accounts.length ? (
@@ -218,7 +218,7 @@ export function AccountsPage() {
       <Modal
         open={modalOpen}
         title="Conectar conta"
-        description="A senha é cifrada no backend e nunca volta nas respostas."
+        description="Sua senha fica armazenada com criptografia e nunca é exibida no painel."
         onClose={closeModal}
       >
         <form className="stack" onSubmit={onCreate}>

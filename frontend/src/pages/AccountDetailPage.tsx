@@ -40,12 +40,14 @@ import type {
   MediaItem,
 } from "../types";
 import {
+  accountErrorLabel,
   accountStatusLabel,
   formatDate,
   formatDuration,
   formatShortDate,
   jobStatusLabel,
   jobTypeLabel,
+  loginAttemptStatusLabel,
   relativeTime,
 } from "../utils";
 
@@ -94,7 +96,7 @@ export function AccountDetailPage() {
         return;
       }
       setMediaError(
-        err instanceof ApiError ? err.message : "Falha ao ler mídia em cache.",
+        err instanceof ApiError ? err.message : "Falha ao carregar a mídia salva.",
       );
     }
   }, [id]);
@@ -190,7 +192,7 @@ export function AccountDetailPage() {
     await runAction(
       "2fa",
       () => api.submit2fa(id, twoFactorCode.trim()),
-      "Código enviado. Estado da conta atualizado.",
+      "Código confirmado.",
     );
     setTwoFactorCode("");
   }
@@ -204,7 +206,7 @@ export function AccountDetailPage() {
           type: "media.list",
           payload: { amount: mediaAmount },
         }),
-      "Job de listagem criado. O worker vai processar a fila.",
+      "Busca de mídia iniciada. Acompanhe o andamento abaixo.",
     );
   }
 
@@ -217,7 +219,7 @@ export function AccountDetailPage() {
           type: "media.download",
           payload: { media_pk: item.pk, kinds: [kind] },
         }),
-      `Download de ${kind} enfileirado.`,
+      "Download iniciado.",
     );
   }
 
@@ -226,7 +228,7 @@ export function AccountDetailPage() {
     await runAction(
       "insights",
       () => api.syncInsights(id),
-      "Sincronização de insights enfileirada.",
+      "Insights serão atualizados em instantes.",
     );
   }
 
@@ -234,7 +236,7 @@ export function AccountDetailPage() {
     await runAction(
       `cancel-${jobId}`,
       () => api.cancelJob(jobId),
-      "Job cancelado.",
+      "Tarefa cancelada.",
     );
   }
 
@@ -264,7 +266,7 @@ export function AccountDetailPage() {
     if (!id) return;
     if (
       !window.confirm(
-        "Excluir esta conta? A sessão será descartada e o username liberado.",
+        "Excluir esta conta? A sessão será removida e o perfil liberado para outra conexão.",
       )
     ) {
       return;
@@ -347,7 +349,7 @@ export function AccountDetailPage() {
               void runAction(
                 "login",
                 () => api.loginAccount(account.id),
-                "Login executado.",
+                "Login concluído.",
               )
             }
             disabled={action !== null || account.status === "disabled"}
@@ -362,7 +364,7 @@ export function AccountDetailPage() {
               void runAction(
                 "health",
                 () => api.health(account.id),
-                "Health check concluído.",
+                "Sessão verificada.",
               )
             }
             disabled={action !== null || !account.has_session}
@@ -394,7 +396,7 @@ export function AccountDetailPage() {
         <div className="warning-banner">
           <AlertTriangle size={17} />
           <div>
-            <strong>{account.last_error_code}</strong>
+            <strong>{accountErrorLabel(account.last_error_code)}</strong>
             <span>
               {account.status === "challenge_required"
                 ? "Resolva a verificação no app oficial e tente o login novamente."
@@ -411,7 +413,7 @@ export function AccountDetailPage() {
           <div className="twofa-copy">
             <strong>Código de verificação pendente</strong>
             <p>
-              Informe o código TOTP/SMS/backup. Ele não é armazenado pelo backend.
+              Informe o código enviado pelo Instagram. Ele não é armazenado.
             </p>
           </div>
           <div className="twofa-input">
@@ -458,7 +460,7 @@ export function AccountDetailPage() {
           onClick={() => setTab("jobs")}
         >
           <ListTodo size={15} />
-          Jobs
+          Tarefas
           {jobs.length > 0 && <span className="tab-count">{jobs.length}</span>}
         </button>
         <button
@@ -478,8 +480,8 @@ export function AccountDetailPage() {
               <h2>Mídia recente</h2>
               <p>
                 {media
-                  ? `${media.items.length} posts em cache · atualizado ${formatShortDate(media.cached_at)}`
-                  : "Nenhuma listagem em cache."}
+                  ? `${media.items.length} posts salvos · atualizado ${formatShortDate(media.cached_at)}`
+                  : "Nenhuma mídia salva ainda."}
               </p>
             </div>
             <div className="inline-actions">
@@ -513,8 +515,8 @@ export function AccountDetailPage() {
           {!media ? (
             <EmptyState
               icon={ImageIcon}
-              title="Sem mídia em cache"
-              description="Enfileire uma listagem para buscar os posts recentes desta conta."
+              title="Nenhuma mídia salva"
+              description="Busque os posts recentes desta conta para vê-los aqui."
               action={
                 <button
                   type="button"
@@ -529,7 +531,7 @@ export function AccountDetailPage() {
           ) : media.items.length === 0 ? (
             <EmptyState
               icon={ImageIcon}
-              title="Nenhum post retornado"
+              title="Nenhum post encontrado"
               description="A conta pode não ter posts públicos ou o Instagram limitou a leitura."
             />
           ) : (
@@ -599,8 +601,8 @@ export function AccountDetailPage() {
               <h2>Insights da conta</h2>
               <p>
                 {insights
-                  ? `Snapshot capturado em ${formatDate(insights.captured_at)}`
-                  : "Nenhum snapshot disponível."}
+                  ? `Dados capturados em ${formatDate(insights.captured_at)}`
+                  : "Ainda não há dados salvos."}
               </p>
             </div>
             <button
@@ -621,7 +623,7 @@ export function AccountDetailPage() {
             <EmptyState
               icon={BarChart3}
               title="Sem insights ainda"
-              description="Enfileire uma sincronização para capturar o snapshot mais recente."
+              description="Sincronize para ver os dados mais recentes."
               action={
                 <button
                   type="button"
@@ -658,8 +660,8 @@ export function AccountDetailPage() {
         <section className="panel">
           <div className="panel-header">
             <div>
-              <h2>Jobs desta conta</h2>
-              <p>A fila é serializada: um job por vez por conta.</p>
+              <h2>Tarefas desta conta</h2>
+              <p>Uma tarefa por vez por conta, para evitar conflitos.</p>
             </div>
             <button
               type="button"
@@ -673,8 +675,8 @@ export function AccountDetailPage() {
           {jobs.length === 0 ? (
             <EmptyState
               icon={ListTodo}
-              title="Nenhum job"
-              description="As ações de mídia, insights e publicação aparecem aqui."
+              title="Nenhuma tarefa"
+              description="Buscas de mídia, insights e publicações aparecem aqui."
             />
           ) : (
             <div className="table-wrap">
@@ -714,7 +716,7 @@ export function AccountDetailPage() {
           <div className="panel-header">
             <div>
               <h2>Histórico de login</h2>
-              <p>Nunca inclui códigos 2FA ou credenciais.</p>
+              <p>Senhas e códigos de verificação nunca aparecem aqui.</p>
             </div>
           </div>
           {attempts.length === 0 ? (
@@ -741,7 +743,7 @@ export function AccountDetailPage() {
                     <tr key={attempt.id}>
                       <td>
                         <span className={`status status-${attempt.status.replaceAll("_", "-")}`}>
-                          {attempt.status.replaceAll("_", " ")}
+                          {loginAttemptStatusLabel(attempt.status)}
                         </span>
                       </td>
                       <td>{attempt.method ?? "—"}</td>
@@ -761,7 +763,7 @@ export function AccountDetailPage() {
       <Modal
         open={editOpen}
         title="Editar conta"
-        description="Trocar a senha força a conta para reautenticação e limpa a sessão."
+        description="Ao trocar a senha, você precisará entrar novamente na conta."
         onClose={() => setEditOpen(false)}
       >
         <form className="stack" onSubmit={saveAccount}>
@@ -884,8 +886,8 @@ function JobRow({
             <div className="job-detail">
               {job.error_code && (
                 <div className="job-error">
-                  <strong>{job.error_code}</strong>
-                  <span>{job.error_message}</span>
+                  <strong>Falha na tarefa</strong>
+                  <span title={job.error_code}>{job.error_message}</span>
                 </div>
               )}
               <div className="job-detail-grid">

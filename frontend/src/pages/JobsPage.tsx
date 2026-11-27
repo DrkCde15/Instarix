@@ -1,5 +1,5 @@
 import { ListTodo, RefreshCw, XCircle } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { JobAssets } from "../components/JobAssets";
@@ -37,6 +37,7 @@ export function JobsPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [canceling, setCanceling] = useState<string | null>(null);
+  const pollingRef = useRef(false);
 
   const accountLabels = useMemo(
     () => new Map(accounts.map((account) => [account.id, account])),
@@ -44,9 +45,11 @@ export function JobsPage() {
   );
 
   const load = useCallback(
-    async (reset = true) => {
-      if (reset) setLoading(true);
-      else setLoadingMore(true);
+    async (reset = true, silent = false) => {
+      if (!silent) {
+        if (reset) setLoading(true);
+        else setLoadingMore(true);
+      }
       try {
         const [page, accountPage] = await Promise.all([
           api.jobs({
@@ -62,10 +65,17 @@ export function JobsPage() {
         setHasMore(Boolean(page.next_cursor));
         if (accountPage) setAccounts(accountPage.items);
       } catch (err) {
-        notify(err instanceof ApiError ? err.message : "Falha ao carregar jobs.", "error");
+        if (!silent) {
+          notify(
+            err instanceof ApiError ? err.message : "Falha ao carregar a fila.",
+            "error",
+          );
+        }
       } finally {
-        setLoading(false);
-        setLoadingMore(false);
+        if (!silent) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
       }
     },
     [cursor, notify, statusFilter, typeFilter],
@@ -73,26 +83,67 @@ export function JobsPage() {
 
   useEffect(() => {
     void load(true);
+    // `load` muda quando o cursor muda; recarregar nesse caso causaria loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter, typeFilter]);
 
   const hasActive = jobs.some(
     (job) => job.status === "queued" || job.status === "running",
   );
+  const loadedCount = jobs.length;
+
+  // Atualização em segundo plano: não troca a tela por Spinner nem descarta
+  // as páginas já carregadas pelo botão "Carregar mais".
+  const poll = useCallback(async () => {
+    if (pollingRef.current || loadingMore) return;
+    pollingRef.current = true;
+    try {
+      const [first, accountPage] = await Promise.all([
+        api.jobs({
+          limit: 50,
+          status: statusFilter || undefined,
+          type: typeFilter || undefined,
+        }),
+        api.accounts(100),
+      ]);
+      const items = [...first.items];
+      let next = first.next_cursor;
+      const target = Math.min(loadedCount, 200);
+      while (next && items.length < target) {
+        const page = await api.jobs({
+          limit: 50,
+          status: statusFilter || undefined,
+          type: typeFilter || undefined,
+          cursor: next,
+        });
+        items.push(...page.items);
+        next = page.next_cursor;
+      }
+      setJobs(items);
+      setCursor(next);
+      setHasMore(Boolean(next));
+      setAccounts(accountPage.items);
+    } catch {
+      // Silencioso: o próximo ciclo tenta novamente.
+    } finally {
+      pollingRef.current = false;
+    }
+  }, [loadedCount, loadingMore, statusFilter, typeFilter]);
+
   useEffect(() => {
     if (!hasActive) return;
-    const timer = window.setInterval(() => void load(true), 5000);
+    const timer = window.setInterval(() => void poll(), 5000);
     return () => window.clearInterval(timer);
-  }, [hasActive, load]);
+  }, [hasActive, poll]);
 
   async function cancel(job: Job) {
     setCanceling(job.id);
     try {
       const updated = await api.cancelJob(job.id);
       setJobs((current) => current.map((item) => (item.id === job.id ? updated : item)));
-      notify("Job cancelado.", "success");
+      notify("Tarefa cancelada.", "success");
     } catch (err) {
-      notify(err instanceof ApiError ? err.message : "Falha ao cancelar job.", "error");
+      notify(err instanceof ApiError ? err.message : "Falha ao cancelar a tarefa.", "error");
     } finally {
       setCanceling(null);
     }
@@ -104,8 +155,8 @@ export function JobsPage() {
     <div className="page">
       <PageHeader
         eyebrow="Fila"
-        title="Jobs"
-        description="Acompanhe o processamento serializado por conta, resultados e erros."
+        title="Fila de tarefas"
+        description="Acompanhe o andamento das tarefas, os resultados e os erros."
         actions={
           <button
             type="button"
@@ -149,14 +200,16 @@ export function JobsPage() {
             </select>
           </label>
         </div>
-        <span className="toolbar-count">{jobs.length} jobs carregados</span>
+        <span className="toolbar-count">
+          {jobs.length} {jobs.length === 1 ? "tarefa carregada" : "tarefas carregadas"}
+        </span>
       </div>
 
       {jobs.length === 0 ? (
         <EmptyState
           icon={ListTodo}
-          title="Nenhum job encontrado"
-          description="Crie uma listagem de mídia, sincronização de insights ou publicação."
+          title="Nenhuma tarefa encontrada"
+          description="Publique algo, busque mídia ou sincronize insights para ver as tarefas aqui."
           action={
             <Link to="/publish" className="button button-primary">
               Ir para publicações
@@ -282,8 +335,8 @@ function JobRow({
             <div className="job-detail">
               {job.error_code && (
                 <div className="job-error">
-                  <strong>{job.error_code}</strong>
-                  <span>{job.error_message}</span>
+                  <strong>Falha na tarefa</strong>
+                  <span title={job.error_code}>{job.error_message}</span>
                 </div>
               )}
               <div className="job-meta">
@@ -293,7 +346,7 @@ function JobRow({
               </div>
               <div className="job-detail-grid">
                 <div>
-                  <span className="label">Payload</span>
+                  <span className="label">Dados enviados</span>
                   <pre className="json-block">
                     {JSON.stringify(job.payload, null, 2)}
                   </pre>

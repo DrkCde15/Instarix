@@ -147,14 +147,16 @@ export function StatCard({
   label: string;
   value: ReactNode;
   hint?: string;
-  icon: LucideIcon;
+  icon?: LucideIcon;
   accent?: "teal" | "violet" | "amber" | "red";
 }) {
   return (
     <div className={`stat-card ${accent ? `stat-${accent}` : ""}`}>
-      <div className="stat-icon">
-        <Icon size={18} />
-      </div>
+      {Icon && (
+        <div className="stat-icon">
+          <Icon size={18} />
+        </div>
+      )}
       <div>
         <span className="stat-label">{label}</span>
         <strong className="stat-value">{value}</strong>
