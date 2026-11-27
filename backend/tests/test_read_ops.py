@@ -1,3 +1,5 @@
+from pydantic import HttpUrl
+
 from tests.helpers import bearer, create_account, register
 from tests.test_jobs import enqueue, get_job, login_account, run_next
 
@@ -38,6 +40,37 @@ def test_media_list_is_cached_after_job(client, worker, ig_gateway):
     assert call["amount"] == 2
     assert call["proxy"] is None
     assert call["session"] is not None
+
+
+def test_media_list_normalizes_non_json_values(client, worker, ig_gateway):
+    """HttpUrl do instagrapi não pode quebrar o commit do resultado."""
+    tokens = register(client)
+    account = create_account(client, tokens)
+    login_account(client, tokens, account["id"])
+
+    url = "https://example.com/thumbnail.jpg"
+    ig_gateway.media_items = [
+        {
+            "pk": "333",
+            "media_type": 1,
+            "caption": "com miniatura",
+            "thumbnail_url": HttpUrl(url),
+        }
+    ]
+    job = enqueue(
+        client, tokens, account["id"], "media.list", {"amount": 1}
+    ).json()
+    run_next(worker)
+
+    finalized = get_job(client, tokens, job["id"])
+    assert finalized["status"] == "succeeded"
+    assert finalized["result"]["items"][0]["thumbnail_url"] == url
+
+    cached = client.get(
+        f"/v1/accounts/{account['id']}/media", headers=bearer(tokens)
+    )
+    assert cached.status_code == 200, cached.text
+    assert cached.json()["items"][0]["thumbnail_url"] == url
 
 
 def test_media_cache_is_tenant_isolated(client, worker):

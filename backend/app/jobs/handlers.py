@@ -5,7 +5,6 @@ Cada handler roda dentro de uma sessão de banco já transacional e devolve o
 sucesso/falha, junto com a eventual mudança de estado da conta.
 """
 
-import json
 import logging
 import tempfile
 from dataclasses import dataclass
@@ -16,10 +15,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.crypto import Cipher
+from app.core.serialization import json_safe
 from app.core.time import utcnow
 from app.db.models import IgAccount, IgAccountStatus, InsightsSnapshot, Job, MediaAsset
+from app.schemas.flow import FlowRunCreate
 from app.jobs.payloads import (
     AccountHealthPayload,
+    FlowEventPayload,
     InsightsAccountPayload,
     MediaDownloadPayload,
     MediaListPayload,
@@ -29,6 +31,7 @@ from app.jobs.payloads import (
     PublishStoryPayload,
     PublishVideoPayload,
 )
+from app.services.flows import FlowService
 from app.services.ig_gateway import IgGateway, IgGatewayError
 from app.services.storage import MediaStorage, content_type_for
 
@@ -120,6 +123,18 @@ def asset_summary(asset: MediaAsset) -> dict[str, Any]:
     }
 
 
+def handle_flow_event(ctx: JobContext) -> dict[str, Any]:
+    payload = FlowEventPayload.model_validate(ctx.job.payload)
+    service = FlowService(ctx.db, gateway=ctx.gateway, cipher=ctx.cipher)
+    run = service.run(
+        ctx.job.tenant_id,
+        payload.flow_id,
+        FlowRunCreate(context=payload.context),
+        ctx.job.created_by,
+    )
+    return {"run_id": str(run.id), "status": run.status, "steps": run.steps}
+
+
 def handle_media_list(ctx: JobContext) -> dict[str, Any]:
     payload = MediaListPayload.model_validate(ctx.job.payload)
     session, proxy = _session(ctx)
@@ -134,7 +149,7 @@ def handle_media_list(ctx: JobContext) -> dict[str, Any]:
     )
     return {
         "username": username,
-        "items": items,
+        "items": json_safe(items),
         "fetched_at": utcnow().isoformat(),
     }
 
@@ -201,10 +216,6 @@ def handle_media_download(ctx: JobContext) -> dict[str, Any]:
         "assets": [asset_summary(asset) for asset in by_kind.values()],
         "cached": False,
     }
-
-
-def _jsonable(value: Any) -> Any:
-    return json.loads(json.dumps(value, default=str))
 
 
 def _upload_path(ctx: JobContext, key: str) -> Path:
@@ -370,7 +381,7 @@ def handle_insights_account(ctx: JobContext) -> dict[str, Any]:
     snapshot = InsightsSnapshot(
         tenant_id=ctx.account.tenant_id,
         account_id=ctx.account.id,
-        data=_jsonable(data),
+        data=json_safe(data),
         captured_at=now,
     )
     ctx.db.add(snapshot)
@@ -408,6 +419,7 @@ def handle_account_health(ctx: JobContext) -> dict[str, Any]:
 
 
 HANDLERS: dict[str, Callable[[JobContext], dict[str, Any]]] = {
+    "flow.event": handle_flow_event,
     "media.list": handle_media_list,
     "media.download": handle_media_download,
     "insights.account": handle_insights_account,

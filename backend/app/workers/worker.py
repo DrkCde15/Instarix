@@ -20,6 +20,7 @@ import threading
 import uuid
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -29,12 +30,16 @@ from sqlalchemy.orm import Session, aliased, sessionmaker
 from app.core.config import Settings, get_settings
 from app.core.crypto import Cipher, get_cipher
 from app.core.logging import configure_logging
+from app.core.serialization import json_safe
 from app.core.time import utcnow
 from app.db.models import IgAccount, IgAccountStatus, Job, JobStatus
 from app.db.session import get_engine
 from app.jobs.handlers import HANDLERS, JobContext, JobError
 from app.jobs.payloads import JOB_PAYLOAD_MODELS
+from app.schemas.job import JobCreate
+from app.services.flows import FlowService
 from app.services.ig_gateway import IgGateway, get_ig_gateway
+from app.services.jobs import JobService
 from app.services.storage import MediaStorage, build_media_storage
 from app.services.webhooks import (
     HttpWebhookNotifier,
@@ -43,6 +48,37 @@ from app.services.webhooks import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _pid_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # processo de outro usuário existe, apenas não sinalizável
+    return True
+
+
+def _lock_owner_alive(locked_by: str | None) -> bool | None:
+    """Verifica o dono de um lock ``host:pid:index:id``.
+
+    ``None`` significa "desconhecido" (formato antigo ou outro host) e nunca
+    autoriza a recuperação — melhor esperar o timeout do que roubar um lock
+    ativo em outra máquina.
+    """
+    if not locked_by:
+        return False
+    parts = locked_by.split(":", 3)
+    if len(parts) < 2 or parts[0] != socket.gethostname():
+        return None
+    try:
+        pid = int(parts[1])
+    except ValueError:
+        return None
+    return _pid_is_alive(pid)
 
 
 class JobWorker:
@@ -200,12 +236,17 @@ class JobWorker:
                 )
             else:
                 job.status = JobStatus.SUCCEEDED
-                job.result = result
+                # Resultados de bibliotecas externas podem conter HttpUrl,
+                # datetime ou enums: normaliza antes de gravar no JSON.
+                job.result = json_safe(result)
                 job.error_code = None
                 job.error_message = None
                 job.locked_by = None
                 job.locked_at = None
                 job.finished_at = utcnow()
+                # O job é persistido antes do webhook: uma falha de entrega
+                # nunca deve desfazer o resultado já obtido.
+                db.commit()
                 self._enqueue_job_event(db, job, "job.succeeded")
                 db.commit()
                 logger.info(
@@ -254,7 +295,6 @@ class JobWorker:
         else:
             job.status = JobStatus.FAILED
             job.finished_at = now
-            self._enqueue_job_event(db, job, "job.failed")
             logger.warning(
                 "job_failed job_id=%s type=%s code=%s attempt=%s/%s",
                 job.id,
@@ -264,22 +304,32 @@ class JobWorker:
                 job.max_attempts,
             )
         db.commit()
+        if job.status == JobStatus.FAILED:
+            self._enqueue_job_event(db, job, "job.failed")
+            db.commit()
 
     def _enqueue_job_event(self, db: Session, job: Job, event: str) -> None:
-        payload = {
-            "job_id": str(job.id),
-            "account_id": str(job.account_id) if job.account_id else None,
-            "type": job.type,
-            "status": job.status,
-            "error_code": job.error_code,
-        }
+        job_id = str(job.id)
+        payload = json_safe(
+            {
+                "job_id": job_id,
+                "account_id": str(job.account_id) if job.account_id else None,
+                "type": job.type,
+                "status": job.status,
+                "error_code": job.error_code,
+            }
+        )
         try:
             with db.begin_nested():
                 WebhookService(db, self.cipher, self.settings).enqueue_event(
                     job.tenant_id, event, payload
                 )
         except Exception:  # noqa: BLE001 - webhook não pode derrubar o job
-            logger.exception("webhook_enqueue_failed job_id=%s event=%s", job.id, event)
+            # A sessão pode ter ficado inválida; o job já foi commitado.
+            db.rollback()
+            logger.exception(
+                "webhook_enqueue_failed job_id=%s event=%s", job_id, event
+            )
 
     def deliver_webhooks(self, limit: int = 20) -> int:
         with self.session_factory() as db:
@@ -287,8 +337,136 @@ class JobWorker:
                 self.webhook_notifier, limit=limit
             )
 
+    def _requeue_lost(self, job: Job, reason: str) -> None:
+        job.locked_by = None
+        job.locked_at = None
+        if job.attempts < job.max_attempts:
+            job.status = JobStatus.QUEUED
+            job.run_after = utcnow()
+            job.error_code = "job_worker_lost"
+            job.error_message = f"{reason} Será repetido."
+            logger.warning(
+                "job_recovered job_id=%s attempt=%s/%s reason=%s",
+                job.id,
+                job.attempts,
+                job.max_attempts,
+                reason,
+            )
+        else:
+            job.status = JobStatus.FAILED
+            job.finished_at = utcnow()
+            job.error_code = "job_worker_lost"
+            job.error_message = reason
+            logger.warning("job_lost job_id=%s reason=%s", job.id, reason)
+
+    def recover_dead_workers(self) -> int:
+        """Libera imediatamente jobs cujo dono do lock não está mais vivo.
+
+        Chamada na inicialização: um worker reiniciado não precisa esperar 10
+        minutos para o sweeper por timeout quando o processo anterior morreu.
+        """
+        with self.session_factory() as db:
+            jobs = list(
+                db.scalars(
+                    select(Job)
+                    .where(
+                        Job.status == JobStatus.RUNNING,
+                        Job.locked_at.is_not(None),
+                    )
+                    .with_for_update(skip_locked=True)
+                )
+            )
+            recovered = 0
+            for job in jobs:
+                if _lock_owner_alive(job.locked_by) is not False:
+                    continue
+                self._requeue_lost(job, "O processo que executava o job não está mais ativo.")
+                recovered += 1
+            if recovered:
+                db.commit()
+            return recovered
+
+    def poll_flow_triggers(self) -> int:
+        """Busca DMs/comentários novos e enfileira um job por evento."""
+        created = 0
+        with self.session_factory() as db:
+            service = FlowService(db, self.settings, self.gateway, self.cipher)
+            for flow in service.due_polls():
+                if not service.claim_poll(flow):
+                    continue
+                account = (
+                    db.get(IgAccount, flow.account_id) if flow.account_id else None
+                )
+                if (
+                    account is None
+                    or account.status != IgAccountStatus.ACTIVE
+                    or not account.session_enc
+                ):
+                    continue
+                try:
+                    session = self.cipher.decrypt_json(account.session_enc)
+                    proxy = (
+                        self.cipher.decrypt(account.proxy_enc)
+                        if account.proxy_enc
+                        else None
+                    )
+                    if flow.trigger_source == "dm":
+                        items = self.gateway.direct_threads(
+                            amount=20, thread_message_limit=10, proxy=proxy, session=session
+                        )
+                        id_field = "message_id"
+                    else:
+                        items = self.gateway.recent_comments(
+                            media_amount=5, comments_per_media=20, proxy=proxy, session=session
+                        )
+                        id_field = "comment_id"
+                except Exception as exc:  # noqa: BLE001 - falha de um fluxo não mata o worker
+                    logger.warning(
+                        "flow_poll_failed flow_id=%s reason=%s", flow.id, exc
+                    )
+                    continue
+
+                fresh: list[dict[str, Any]] = []
+                for item in items:
+                    ident = str(item.get(id_field) or "")
+                    if not ident:
+                        continue
+                    if flow.last_seen_id and ident == flow.last_seen_id:
+                        break
+                    fresh.append(item)
+                if not fresh:
+                    continue
+
+                flow.last_seen_id = str(fresh[0].get(id_field))
+                db.commit()
+                for item in reversed(fresh):
+                    context = {
+                        "source": flow.trigger_source,
+                        "account_id": str(account.id),
+                        "subscriber_id": str(item.get("user_id") or ""),
+                        "username": str(item.get("username") or ""),
+                        "input_text": str(item.get("text") or ""),
+                    }
+                    if flow.trigger_source == "dm":
+                        context["thread_id"] = str(item.get("thread_id") or "")
+                        context["message_id"] = str(item.get("message_id") or "")
+                    else:
+                        context["comment_id"] = str(item.get("comment_id") or "")
+                        context["media_pk"] = str(item.get("media_pk") or "")
+                    JobService(db, self.settings).create(
+                        flow.tenant_id,
+                        account.id,
+                        JobCreate(
+                            type="flow.event",
+                            payload={"flow_id": str(flow.id), "context": context},
+                        ),
+                        None,
+                    )
+                    created += 1
+        return created
+
     def sweep(self) -> int:
-        """Recupera jobs running cujo worker morreu (lock antigo)."""
+        """Recupera jobs running cujo lock ficou antigo (timeout)."""
         cutoff = utcnow() - timedelta(seconds=self.settings.job_lock_timeout_seconds)
         with self.session_factory() as db:
             jobs = list(
@@ -303,25 +481,7 @@ class JobWorker:
                 )
             )
             for job in jobs:
-                job.locked_by = None
-                job.locked_at = None
-                if job.attempts < job.max_attempts:
-                    job.status = JobStatus.QUEUED
-                    job.run_after = utcnow()
-                    job.error_code = "job_worker_lost"
-                    job.error_message = "O worker interrompeu o job; será repetido."
-                    logger.warning(
-                        "job_recovered job_id=%s attempt=%s/%s",
-                        job.id,
-                        job.attempts,
-                        job.max_attempts,
-                    )
-                else:
-                    job.status = JobStatus.FAILED
-                    job.finished_at = utcnow()
-                    job.error_code = "job_worker_lost"
-                    job.error_message = "O worker interrompeu o job."
-                    logger.warning("job_lost job_id=%s", job.id)
+                self._requeue_lost(job, "O worker interrompeu o job.")
             if jobs:
                 db.commit()
             return len(jobs)
@@ -341,9 +501,11 @@ class JobWorker:
         return processed
 
     def run_forever(self, stop: threading.Event) -> None:
+        self.recover_dead_workers()
         while not stop.is_set():
             try:
                 self.sweep()
+                self.poll_flow_triggers()
                 self.deliver_webhooks()
                 processed = self.run_available(limit=50, stop=stop)
                 if processed == 0:
@@ -392,12 +554,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.once:
         worker = build_worker(0, settings, cipher, gateway)
+        recovered = worker.recover_dead_workers()
         swept = worker.sweep()
+        polled = worker.poll_flow_triggers()
         processed = worker.run_available(limit=1000)
         delivered = worker.deliver_webhooks(limit=1000)
         logger.info(
-            "worker_once_finished swept=%s processed=%s delivered=%s",
+            "worker_once_finished recovered=%s swept=%s polled=%s processed=%s delivered=%s",
+            recovered,
             swept,
+            polled,
             processed,
             delivered,
         )

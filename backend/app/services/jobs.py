@@ -52,7 +52,7 @@ class JobService:
     def _validate_payload(self, job_type: str, payload: dict) -> dict:
         model = JOB_PAYLOAD_MODELS[job_type]
         try:
-            return model.model_validate(payload).model_dump()
+            return model.model_validate(payload).model_dump(mode="json")
         except ValidationError as exc:
             raise AppError(
                 422,

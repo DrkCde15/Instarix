@@ -1,3 +1,5 @@
+import os
+import socket
 from datetime import timedelta
 from uuid import UUID
 
@@ -422,6 +424,62 @@ def test_sweeper_recovers_job_from_dead_worker(client, worker, session_factory):
     assert lost["status"] == "failed"
     assert lost["error_code"] == "job_worker_lost"
     assert lost["finished_at"] is not None
+
+
+def test_startup_recovers_job_owned_by_dead_process(client, worker, session_factory):
+    tokens = register(client)
+    account = create_account(client, tokens)
+    login_account(client, tokens, account["id"])
+    job = enqueue(client, tokens, account["id"]).json()
+
+    with session_factory() as db:
+        row = db.get(Job, UUID(job["id"]))
+        assert row is not None
+        row.status = "running"
+        row.attempts = 1
+        row.locked_by = f"{socket.gethostname()}:999999:0:deadbeef"
+        row.locked_at = utcnow()
+        db.commit()
+
+    assert worker.recover_dead_workers() == 1
+    recovered = get_job(client, tokens, job["id"])
+    assert recovered["status"] == "queued"
+    assert recovered["error_code"] == "job_worker_lost"
+    assert recovered["attempts"] == 1
+    with session_factory() as db:
+        row = db.get(Job, UUID(job["id"]))
+        assert row is not None
+        assert row.locked_by is None
+        assert row.locked_at is None
+
+
+def test_startup_does_not_steal_live_or_foreign_locks(client, worker, session_factory):
+    tokens = register(client)
+    first = create_account(client, tokens, username="conta_viva")
+    second = create_account(client, tokens, username="conta_outro_host")
+    login_account(client, tokens, first["id"])
+    login_account(client, tokens, second["id"])
+    jobs = [
+        enqueue(client, tokens, first["id"]).json(),
+        enqueue(client, tokens, second["id"]).json(),
+    ]
+    owners = [
+        f"{socket.gethostname()}:{os.getpid()}:0:alive1",
+        "outro-host:999999:1:foreign",
+    ]
+
+    with session_factory() as db:
+        for job, owner in zip(jobs, owners):
+            row = db.get(Job, UUID(job["id"]))
+            assert row is not None
+            row.status = "running"
+            row.locked_by = owner
+            row.locked_at = utcnow()
+        db.commit()
+
+    assert worker.recover_dead_workers() == 0
+    for job in jobs:
+        assert get_job(client, tokens, job["id"])["status"] == "running"
 
 
 def test_worker_id_is_isolated_between_instances(

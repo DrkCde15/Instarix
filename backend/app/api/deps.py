@@ -27,6 +27,7 @@ from app.db.rls import activate, deactivate
 from app.db.session import get_db
 from app.services.accounts import AccountService
 from app.services.device import DeviceProfileProvider, get_device_provider
+from app.services.flows import FlowService
 from app.services.ig_gateway import IgGateway, get_ig_gateway
 from app.services.jobs import JobService
 from app.services.login import LoginService
@@ -166,6 +167,15 @@ def get_job_service(
     db: Session = Depends(get_db), settings: Settings = Depends(get_settings)
 ) -> JobService:
     return JobService(db, settings)
+
+
+def get_flow_service(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    gateway: IgGateway = Depends(get_ig_gateway),
+    cipher: Cipher = Depends(get_cipher),
+) -> FlowService:
+    return FlowService(db, settings, gateway, cipher)
 
 
 def get_quota_service(

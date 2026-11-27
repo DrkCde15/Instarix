@@ -5,7 +5,8 @@ gravado por uma versão antiga nunca chegue cru ao handler.
 """
 
 import re
-from typing import Literal
+from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -126,7 +127,15 @@ class PublishStoryPayload(BaseModel):
         return _storage_key(value)
 
 
+class FlowEventPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    flow_id: UUID
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
 JOB_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
+    "flow.event": FlowEventPayload,
     "media.list": MediaListPayload,
     "media.download": MediaDownloadPayload,
     "insights.account": InsightsAccountPayload,

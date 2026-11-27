@@ -5,6 +5,7 @@ from app.api.v1 import (
     api_keys,
     audit,
     auth,
+    flows,
     jobs,
     me,
     media,
@@ -20,6 +21,7 @@ api_router.include_router(me.router)
 api_router.include_router(accounts.router)
 api_router.include_router(jobs.account_router)
 api_router.include_router(jobs.router)
+api_router.include_router(flows.router)
 api_router.include_router(media.router)
 api_router.include_router(uploads.router)
 api_router.include_router(webhooks.router)

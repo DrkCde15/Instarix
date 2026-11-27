@@ -34,6 +34,10 @@ class FakeIgGateway:
     health_calls: list[dict[str, Any]] = field(default_factory=list)
     logout_calls: list[dict[str, Any]] = field(default_factory=list)
     media_items: list[dict[str, Any]] = field(default_factory=list)
+    direct_messages: list[dict[str, Any]] = field(default_factory=list)
+    comment_items: list[dict[str, Any]] = field(default_factory=list)
+    direct_calls: list[dict[str, Any]] = field(default_factory=list)
+    comment_calls: list[dict[str, Any]] = field(default_factory=list)
     insights_data: dict[str, Any] = field(default_factory=dict)
     media_list_error: Exception | None = None
     download_error: Exception | None = None
@@ -67,6 +71,22 @@ class FakeIgGateway:
         if self.media_list_error is not None:
             raise self.media_list_error
         return list(self.media_items)
+
+    def direct_threads(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return list(self.direct_messages)
+
+    def direct_answer(self, *, thread_id: str, message: str, **kwargs: Any) -> None:
+        self.direct_calls.append({"thread_id": thread_id, "message": message})
+
+    def recent_comments(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return list(self.comment_items)
+
+    def reply_comment(
+        self, *, media_pk: str, comment_id: str, message: str, **kwargs: Any
+    ) -> None:
+        self.comment_calls.append(
+            {"media_pk": media_pk, "comment_id": comment_id, "message": message}
+        )
 
     def media_download(
         self, *, media_pk: str, kinds: list[str], folder: Path, **kwargs: Any

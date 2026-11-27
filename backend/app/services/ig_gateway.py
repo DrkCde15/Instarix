@@ -122,6 +122,43 @@ class IgGateway(Protocol):
         session: dict[str, Any],
     ) -> list[dict[str, Any]]: ...
 
+    def direct_threads(
+        self,
+        *,
+        amount: int,
+        thread_message_limit: int,
+        proxy: str | None,
+        session: dict[str, Any],
+    ) -> list[dict[str, Any]]: ...
+
+    def direct_answer(
+        self,
+        *,
+        thread_id: str,
+        message: str,
+        proxy: str | None,
+        session: dict[str, Any],
+    ) -> None: ...
+
+    def recent_comments(
+        self,
+        *,
+        media_amount: int,
+        comments_per_media: int,
+        proxy: str | None,
+        session: dict[str, Any],
+    ) -> list[dict[str, Any]]: ...
+
+    def reply_comment(
+        self,
+        *,
+        media_pk: str,
+        comment_id: str,
+        message: str,
+        proxy: str | None,
+        session: dict[str, Any],
+    ) -> None: ...
+
     def media_download(
         self,
         *,
@@ -407,6 +444,101 @@ class InstagrapiGateway:
             self._raise_read_error(exc)
             raise
         return [self._media_summary(media) for media in medias]
+
+    def direct_threads(
+        self,
+        *,
+        amount: int,
+        thread_message_limit: int,
+        proxy: str | None,
+        session: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        client = self._client({}, proxy, session)
+        try:
+            threads = client.direct_threads(
+                amount=amount, thread_message_limit=thread_message_limit
+            )
+        except Exception as exc:  # noqa: BLE001 - mapeado abaixo
+            self._raise_read_error(exc)
+            raise
+        result: list[dict[str, Any]] = []
+        for thread in threads:
+            for message in thread.messages or []:
+                if getattr(message, "is_sent_by_viewer", False):
+                    continue
+                if getattr(message, "item_type", "") != "text":
+                    continue
+                result.append(
+                    {
+                        "message_id": str(getattr(message, "id", "")),
+                        "thread_id": str(getattr(thread, "pk", "") or getattr(thread, "id", "")),
+                        "user_id": str(getattr(message, "user_id", "") or ""),
+                        "text": str(getattr(message, "text", "") or ""),
+                    }
+                )
+        return result
+
+    def direct_answer(
+        self,
+        *,
+        thread_id: str,
+        message: str,
+        proxy: str | None,
+        session: dict[str, Any],
+    ) -> None:
+        client = self._client({}, proxy, session)
+        try:
+            client.direct_answer(int(thread_id), message)
+        except Exception as exc:  # noqa: BLE001 - mapeado abaixo
+            self._raise_read_error(exc)
+            raise
+
+    def recent_comments(
+        self,
+        *,
+        media_amount: int,
+        comments_per_media: int,
+        proxy: str | None,
+        session: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        client = self._client({}, proxy, session)
+        try:
+            medias = client.user_medias(str(client.user_id), amount=media_amount)
+            result: list[dict[str, Any]] = []
+            for media in medias:
+                for comment in client.media_comments(str(media.pk), amount=comments_per_media):
+                    user = getattr(comment, "user", None)
+                    result.append(
+                        {
+                            "comment_id": str(getattr(comment, "pk", "")),
+                            "media_pk": str(getattr(media, "pk", "")),
+                            "user_id": str(getattr(user, "pk", "") or ""),
+                            "username": str(getattr(user, "username", "") or ""),
+                            "text": str(getattr(comment, "text", "") or ""),
+                        }
+                    )
+            return result
+        except Exception as exc:  # noqa: BLE001 - mapeado abaixo
+            self._raise_read_error(exc)
+            raise
+
+    def reply_comment(
+        self,
+        *,
+        media_pk: str,
+        comment_id: str,
+        message: str,
+        proxy: str | None,
+        session: dict[str, Any],
+    ) -> None:
+        client = self._client({}, proxy, session)
+        try:
+            client.media_comment(
+                int(media_pk), message, replied_to_comment_id=int(comment_id)
+            )
+        except Exception as exc:  # noqa: BLE001 - mapeado abaixo
+            self._raise_read_error(exc)
+            raise
 
     def media_download(
         self,
