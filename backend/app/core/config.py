@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     registration_enabled: bool = True
     cors_origins: list[str] = Field(default_factory=list)
 
+    # Estado do rate limiting/lockout: "memory" por processo ou "redis"
+    # compartilhado entre workers (use Redis em produção horizontal).
+    rate_limit_backend: Literal["memory", "redis"] = "memory"
+
     # Rate limiting dos endpoints de auth (por IP, janela deslizante).
     # limit <= 0 desativa aquele limite.
     auth_login_limit: int = 10
@@ -130,6 +134,8 @@ class Settings(BaseSettings):
             raise ValueError(
                 "AUTH_COOKIE_SAMESITE=none exige AUTH_COOKIE_SECURE=true"
             )
+        if self.rate_limit_backend == "redis" and not self.redis_url:
+            raise ValueError("RATE_LIMIT_BACKEND=redis exige REDIS_URL")
         return self
 
     @property
