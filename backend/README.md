@@ -27,7 +27,7 @@ rotação de chaves e RLS opt-in.
 cd backend
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements-dev.txt
+pip install -r requirements.lock
 
 cp .env.example .env
 # Preencha JWT_SECRET e SECRETS_KEYS (comandos de geração estão no .env.example)
@@ -59,9 +59,13 @@ Postgres do compose é apenas para desenvolvimento.
 
 ```bash
 cd backend
-pip install -r requirements-dev.txt
+pip install -r requirements.lock
 pytest
 ```
+
+`requirements.lock` fixa o ambiente validado pela CI (Python 3.12/Linux),
+incluindo as dependências transitivas de teste. `requirements.txt` e
+`requirements-dev.txt` mantêm as faixas de versões para atualizações futuras.
 
 Os testes usam SQLite temporário e sobrescrevem `get_db`, `get_device_provider`,
 `get_ig_gateway` e o storage de mídia; não precisam de Postgres nem de rede.
@@ -88,13 +92,13 @@ rotação do refresh e bloqueio de SSRF.
 | `ACCESS_TOKEN_TTL_MINUTES` | não | padrão 15 |
 | `REFRESH_TOKEN_TTL_DAYS` | não | padrão 30 |
 | `AUTH_COOKIE_SECURE` | não | força `Secure` no cookie de refresh; padrão `true` em `prod` e `false` nos demais |
-| `AUTH_COOKIE_SAMESITE` | não | `lax` (padrão), `strict` ou `none` |
+| `AUTH_COOKIE_SAMESITE` | não | `lax` (padrão), `strict` ou `none`; `none` exige `AUTH_COOKIE_SECURE=true` |
 | `AUTH_COOKIE_DOMAIN` | não | domínio do cookie de refresh; vazio usa o host da API |
 | `AUTH_REFRESH_COOKIE_NAME` / `AUTH_COOKIE_PATH` | não | nome e path do cookie (padrão `instarix_refresh` / `/v1/auth`) |
 | `TRUST_PROXY_HEADERS` | não | usa `X-Forwarded-For` para o IP do cliente; padrão `false`, habilite só atrás de proxy reverso controlado |
 | `PROXY_ALLOW_PRIVATE` | não | permite proxies de conta em IPs privados; padrão `false` em `prod` e `true` nos demais ambientes |
 | `REGISTRATION_ENABLED` | não | padrão `true`; desative após criar o primeiro tenant |
-| `CORS_ORIGINS` | não | lista JSON, ex. `["https://app.exemplo.com"]` |
+| `CORS_ORIGINS` | não | lista JSON de origens exatas, ex. `["https://app.exemplo.com"]`; `*` é recusado |
 | `AUTH_LOGIN_LIMIT` / `AUTH_LOGIN_WINDOW_SECONDS` | não | tentativas de login por IP (padrão 10 / 5 min); `0` desativa |
 | `AUTH_REGISTER_LIMIT` / `AUTH_REGISTER_WINDOW_SECONDS` | não | cadastros por IP (padrão 5 / 1 h) |
 | `AUTH_REFRESH_LIMIT` / `AUTH_REFRESH_WINDOW_SECONDS` | não | refresh por IP (padrão 30 / 5 min) |
@@ -309,6 +313,13 @@ gestão de webhook. `GET /v1/audit-logs` permite filtrar por `action`,
   token já rotacionado revoga a família inteira. O navegador recebe o token em
   cookie `HttpOnly` (e `Secure` fora de desenvolvimento), enquanto o access
   token fica apenas em memória.
+- **CSRF:** refresh e logout autenticados por cookie exigem `Origin` igual ao
+  host da requisição ou listado em `CORS_ORIGINS` (`403 csrf_origin_rejected`);
+  a defesa principal continua sendo `SameSite=lax`. Respostas com tokens saem
+  com `Cache-Control: no-store`.
+- O CORS usa credenciais (cookie de refresh), então `CORS_ORIGINS` só aceita
+  origens exatas — curinga é rejeitado na inicialização, e `SameSite=none`
+  exige cookie `Secure`.
 - API keys no formato `ik_live_<prefix>_<secret>`, persistidas só como hash e
   limitadas por escopo (`accounts:read`, `accounts:write`, `accounts:2fa`,
   `jobs:read`, `jobs:write`, `keys:manage`).
@@ -331,9 +342,11 @@ gestão de webhook. `GET /v1/audit-logs` permite filtrar por `action`,
   status/contagem/erro.
 - Segredos nunca aparecem nas respostas: `AccountOut` expõe apenas `has_proxy`,
   `has_session` e metadados de status/erro.
-- **SSRF:** webhooks validam esquema/host, resolvem o DNS antes do envio e
-  recusam IPs privados, loopback, link-local e reservados; redirects HTTP são
-  desabilitados no cliente. Proxies de conta passam pela mesma checagem (com
+- **SSRF:** webhooks aceitam só esquema/host válidos e apenas IPs globais
+  (privado, loopback, link-local, CGNAT e reservados são recusados). O host é
+  resolvido uma única vez e a conexão é feita no IP validado (pinagem), então
+  uma segunda resposta DNS não desvia o POST para a rede interna; redirects
+  nunca são seguidos. Proxies de conta passam pela mesma checagem (com
   `PROXY_ALLOW_PRIVATE` apenas para desenvolvimento).
 - **IP do cliente:** `client_ip()` usa `request.client.host` por padrão e só lê
   `X-Forwarded-For` quando `TRUST_PROXY_HEADERS=true`, evitando que um cliente
@@ -369,11 +382,11 @@ gestão de webhook. `GET /v1/audit-logs` permite filtrar por `action`,
   estar no volume compartilhado entre API e worker. A validação combina
   extensão, `Content-Type` e magic bytes dos formatos suportados, mas não faz
   decodificação profunda do arquivo.
-- A entrega de webhooks é síncrona dentro do loop do worker e usa `urllib`.
-  Não há fila dedicada, dead-letter queue nem reentrega manual. O host é
-  resolvido e validado antes de cada envio e redirects são bloqueados; resta uma
-  janela de TOCTOU entre a validação e a conexão (DNS rebinding), não coberta
-  por pinagem de IP.
+- A entrega de webhooks é síncrona dentro do loop do worker, com
+  `http.client` sobre o IP pinado. Não há fila dedicada, dead-letter queue nem
+  reentrega manual. O IP pinado cobre o DNS rebinding, mas a conexão ainda é
+  feita sem `happy eyeballs`/IPv6-first: usa o primeiro endereço global
+  resolvido.
 - Publicações não têm agendamento (`schedule_at`) nem reconciliação automática
   de post ambíguo; o cliente precisa confirmar na conta.
 - O rate limit por API key é em memória por processo; com várias instâncias o

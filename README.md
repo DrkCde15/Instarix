@@ -31,10 +31,11 @@ O projeto é dividido em dois pacotes:
   `tenant_id`; IDs de outro tenant respondem `404`.
 - O refresh token é rotativo, com lock transacional e detecção de reuso que
   revoga a família. O navegador recebe o refresh em cookie `HttpOnly, Secure`
-  (configurável) e mantém o access token apenas em memória.
-- Webhooks validam a URL e resolvem o DNS antes de cada envio, recusando IPs
-  privados/loopback e redirects. Proxies de conta também recusam hosts privados
-  fora de desenvolvimento.
+  (configurável) e mantém o access token apenas em memória; refresh/logout por
+  cookie validam `Origin` contra o host e `CORS_ORIGINS` (CSRF).
+- Webhooks resolvem o DNS uma única vez e conectam no IP validado (sem DNS
+  rebinding), recusando IPs não globais e redirects. Proxies de conta também
+  recusam hosts privados fora de desenvolvimento.
 - `X-Forwarded-For` só é considerado com `TRUST_PROXY_HEADERS=true`, para uso
   atrás de um proxy reverso controlado.
 - Uploads são validados por extensão, `Content-Type` e magic bytes.
@@ -71,7 +72,7 @@ de banco externo.
 cd backend
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements-dev.txt
+pip install -r requirements.lock
 
 cp .env.example .env
 # Preencha DATABASE_URL, JWT_SECRET e SECRETS_KEYS.
@@ -149,10 +150,19 @@ Detalhes de autenticação, rotas e comportamento da API estão em
 cd backend
 .venv/bin/python -m pytest -q
 
-# Frontend: typecheck + build de produção
+# Frontend: testes unitários + typecheck + build de produção
 cd frontend
+npm test
 npm run build
 ```
+
+A CI em [`.github/workflows/ci.yml`](.github/workflows/ci.yml) roda esses mesmos
+comandos em Python 3.12 e Node 22 a cada push e pull request.
+
+O backend usa [`backend/requirements.lock`](backend/requirements.lock) para
+reproduzir o ambiente de CI em Python 3.12. Os arquivos
+`backend/requirements*.txt` continuam sendo a fonte das faixas de versões;
+atualize o lock conscientemente ao alterar essas faixas.
 
 ## Documentação
 

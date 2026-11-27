@@ -44,6 +44,8 @@ Abra `http://localhost:5173`. Em desenvolvimento o Vite faz proxy de `/v1` para
 
 ```bash
 npm run dev        # servidor de desenvolvimento
+npm test           # testes unitários do cliente HTTP e da sessão
+npm run test:watch # testes em modo observação
 npm run typecheck  # apenas TypeScript
 npm run build      # typecheck + build de produção em dist/
 npm run preview    # serve o build localmente
@@ -117,7 +119,8 @@ src/
 
 ## Limitações
 
-- Não há suíte de testes de frontend; a verificação atual é `npm run build`.
+- A suíte atual cobre o cliente HTTP e a restauração/expiração de sessão; telas
+  operacionais e fluxos completos no navegador ainda precisam de testes e2e.
 - O painel não gerencia usuários/convites do tenant; o backend é 1 usuário por
   tenant nesta fase.
 - Não há WebSocket nem atualização otimista: a fila depende de polling.
