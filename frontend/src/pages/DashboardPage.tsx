@@ -1,28 +1,16 @@
-import {
-  ArrowUpRight,
-  ListTodo,
-  Plus,
-  RefreshCw,
-  Send,
-  ShieldAlert,
-  Users,
-} from "lucide-react";
+import { Activity, ArrowUpRight, ListTodo, Plus, RefreshCw, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api";
+import { ActivityChart } from "../components/ActivityChart";
 import { EmptyState, PageHeader, Spinner, StatCard } from "../components/ui";
-import type { Account, Job, Usage } from "../types";
-import {
-  accountStatusLabel,
-  formatShortDate,
-  jobStatusLabel,
-  jobTypeLabel,
-  relativeTime,
-} from "../utils";
+import type { Account, FlowSummary, Job, Usage } from "../types";
+import { jobStatusLabel, jobTypeLabel, relativeTime } from "../utils";
 import { useToast } from "../toast";
 
 export function DashboardPage() {
   const { notify } = useToast();
+  const [summary, setSummary] = useState<FlowSummary | null>(null);
   const [usage, setUsage] = useState<Usage | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -36,17 +24,19 @@ export function DashboardPage() {
       setRefreshing(true);
       setError(null);
       try {
-        const [nextUsage, accountPage, jobPage] = await Promise.all([
+        const [nextSummary, nextUsage, accountPage, jobPage] = await Promise.all([
+          api.flowsSummary(),
           api.usage(),
           api.accounts(100),
           api.jobs({ limit: 6 }),
         ]);
+        setSummary(nextSummary);
         setUsage(nextUsage);
         setAccounts(accountPage.items);
         setJobs(jobPage.items);
       } catch (err) {
         const message =
-          err instanceof ApiError ? err.message : "Falha ao carregar a visão geral.";
+          err instanceof ApiError ? err.message : "Falha ao carregar o dashboard.";
         setError(message);
         if (silent) notify(message, "error");
       } finally {
@@ -61,22 +51,16 @@ export function DashboardPage() {
     void load();
   }, [load]);
 
-  if (loading) return <Spinner label="Carregando visão geral" />;
+  if (loading) return <Spinner label="Carregando dashboard" />;
 
-  const active = accounts.filter((account) => account.status === "active").length;
-  const attention = accounts.filter((account) =>
-    ["2fa_required", "needs_reauth", "challenge_required"].includes(account.status),
-  );
-  const recent = [...accounts]
-    .sort((a, b) => b.created_at.localeCompare(a.created_at))
-    .slice(0, 5);
+  const successRate = summary?.success_rate ?? 0;
 
   return (
     <div className="page">
       <PageHeader
-        eyebrow="Operação"
-        title="Visão geral"
-        description="O pulso das suas contas, fila e consumo em um só lugar."
+        eyebrow="Visão geral"
+        title="Dashboard"
+        description="O desempenho das suas automações e o estado da operação."
         actions={
           <>
             <button
@@ -88,9 +72,9 @@ export function DashboardPage() {
               <RefreshCw size={15} className={refreshing ? "spin" : ""} />
               Atualizar
             </button>
-            <Link className="button button-primary" to="/accounts?new=1">
+            <Link className="button button-primary" to="/flows">
               <Plus size={16} />
-              Nova conta
+              Novo fluxo
             </Link>
           </>
         }
@@ -100,149 +84,107 @@ export function DashboardPage() {
 
       <section className="stats-grid">
         <StatCard
-          label="Contas conectadas"
-          value={`${usage?.accounts_used ?? accounts.length}`}
-          hint={
-            usage?.accounts_limit
-              ? `de ${usage.accounts_limit} no plano ${usage.plan}`
-              : `plano ${usage?.plan ?? "—"} · ilimitado`
-          }
-          icon={Users}
+          label="Automações"
+          value={summary?.total_flows ?? 0}
+          hint={`${summary?.draft_flows ?? 0} rascunho(s)`}
+          icon={Activity}
           accent="teal"
         />
         <StatCard
-          label="Contas ativas"
-          value={active}
-          hint={`${accounts.length - active} em outro estado`}
-          icon={ShieldAlert}
+          label="Ativas"
+          value={summary?.active_flows ?? 0}
+          hint={`${summary?.paused_flows ?? 0} pausada(s)`}
+          icon={Activity}
           accent="violet"
         />
         <StatCard
-          label="Jobs hoje"
-          value={usage?.jobs_today_used ?? 0}
-          hint={
-            usage?.jobs_today_limit
-              ? `de ${usage.jobs_today_limit}`
-              : "sem limite diário"
-          }
+          label="Execuções"
+          value={summary?.total_runs ?? 0}
+          hint={`${summary?.succeeded_runs ?? 0} concluídas`}
           icon={ListTodo}
           accent="amber"
         />
         <StatCard
-          label="Precisam de atenção"
-          value={attention.length}
-          hint={
-            attention.length
-              ? attention
-                  .slice(0, 2)
-                  .map((account) => `@${account.username}`)
-                  .join(", ")
-              : "tudo em ordem"
-          }
-          icon={ShieldAlert}
-          accent={attention.length ? "red" : "teal"}
+          label="Taxa de sucesso"
+          value={`${successRate.toFixed(1)}%`}
+          hint="sobre as execuções registradas"
+          icon={Activity}
+          accent={successRate >= 80 ? "teal" : "red"}
         />
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>Atividade das automações</h2>
+            <p>Execuções nos últimos 14 dias.</p>
+          </div>
+          <Link to="/analytics" className="text-link">
+            Ver analytics <ArrowUpRight size={14} />
+          </Link>
+        </div>
+        <ActivityChart data={summary?.activity ?? []} />
       </section>
 
       <div className="dashboard-grid">
         <section className="panel">
           <div className="panel-header">
             <div>
-              <h2>Contas recentes</h2>
-              <p>Estados de sessão e últimos acessos.</p>
+              <h2>Automações mais usadas</h2>
+              <p>Ordenadas por número de execuções.</p>
             </div>
-            <Link to="/accounts" className="text-link">
-              Ver todas <ArrowUpRight size={14} />
+            <Link to="/automations" className="text-link">
+              Gerenciar <ArrowUpRight size={14} />
             </Link>
           </div>
-          {recent.length === 0 ? (
+          {!summary?.top_flows.length ? (
             <EmptyState
-              icon={Users}
-              title="Nenhuma conta ainda"
-              description="Conecte a primeira conta para começar a operar pelo painel."
+              icon={Activity}
+              title="Nenhuma execução ainda"
+              description="Crie um fluxo e execute um teste para ver dados aqui."
               action={
-                <Link className="button button-primary" to="/accounts?new=1">
-                  <Plus size={16} />
-                  Conectar conta
+                <Link className="button button-primary" to="/flows">
+                  Criar fluxo
                 </Link>
               }
             />
           ) : (
-            <div className="table-wrap">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Conta</th>
-                    <th>Estado</th>
-                    <th>Último login</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recent.map((account) => (
-                    <tr key={account.id}>
-                      <td>
-                        <Link to={`/accounts/${account.id}`} className="row-title">
-                          <span className="avatar avatar-small">
-                            {account.label.slice(0, 1).toUpperCase()}
-                          </span>
-                          <span>
-                            <strong>{account.label}</strong>
-                            <small>@{account.username}</small>
-                          </span>
-                        </Link>
-                      </td>
-                      <td>
-                        <span className={`status status-${account.status.replaceAll("_", "-")}`}>
-                          {accountStatusLabel(account.status)}
-                        </span>
-                      </td>
-                      <td className="muted">{formatShortDate(account.last_login_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ol className="ranked-list">
+              {summary.top_flows.map((flow, index) => (
+                <li key={flow.flow_id}>
+                  <span className="rank-number">{index + 1}</span>
+                  <Link to={`/flows?id=${flow.flow_id}`} className="row-title">
+                    {flow.name}
+                  </Link>
+                  <span className="muted">{flow.runs} execuções</span>
+                </li>
+              ))}
+            </ol>
           )}
         </section>
 
         <section className="panel">
           <div className="panel-header">
             <div>
-              <h2>Fila recente</h2>
-              <p>Últimos jobs criados no workspace.</p>
+              <h2>Execuções recentes</h2>
+              <p>Últimas corridas registradas.</p>
             </div>
-            <Link to="/jobs" className="text-link">
-              Ver fila <ArrowUpRight size={14} />
-            </Link>
           </div>
-          {jobs.length === 0 ? (
-            <EmptyState
-              icon={ListTodo}
-              title="Fila vazia"
-              description="Enfileire uma listagem de mídia ou publicação para ver os jobs aqui."
-              action={
-                <Link className="button button-ghost" to="/publish">
-                  <Send size={15} />
-                  Publicar algo
-                </Link>
-              }
-            />
+          {!summary?.recent_runs.length ? (
+            <p className="muted">Nenhuma execução registrada.</p>
           ) : (
             <ul className="activity-list">
-              {jobs.map((job) => (
-                <li key={job.id} className="activity-item">
-                  <div className={`activity-dot activity-${job.status}`} />
+              {summary.recent_runs.map((run) => (
+                <li key={run.id} className="activity-item">
+                  <div className={`activity-dot activity-${run.status}`} />
                   <div className="activity-body">
                     <div className="activity-title">
-                      <strong>{jobTypeLabel(job.type)}</strong>
-                      <span className={`status status-${job.status}`}>
-                        {jobStatusLabel(job.status)}
+                      <strong>{run.trigger}</strong>
+                      <span className={`status status-${run.status}`}>
+                        {jobStatusLabel(run.status)}
                       </span>
                     </div>
-                    <small>
-                      {relativeTime(job.created_at)} · tentativa {job.attempts}/
-                      {job.max_attempts}
-                    </small>
+                    <small>{relativeTime(run.created_at)}</small>
                   </div>
                 </li>
               ))}
@@ -251,31 +193,54 @@ export function DashboardPage() {
         </section>
       </div>
 
-      {attention.length > 0 && (
-        <section className="panel attention-panel">
-          <div className="panel-header">
-            <div>
-              <h2>Contas que precisam de você</h2>
-              <p>2FA, reautenticação ou challenge exigem ação no app oficial.</p>
-            </div>
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>Operação</h2>
+            <p>Contas conectadas e fila de jobs do workspace.</p>
           </div>
-          <div className="attention-list">
-            {attention.map((account) => (
-              <Link
-                key={account.id}
-                to={`/accounts/${account.id}`}
-                className="attention-item"
-              >
-                <div>
-                  <strong>@{account.username}</strong>
-                  <span>{accountStatusLabel(account.status)}</span>
-                </div>
-                <ArrowUpRight size={16} />
-              </Link>
+          <Link to="/jobs" className="text-link">
+            Ver fila <ArrowUpRight size={14} />
+          </Link>
+        </div>
+        <div className="stats-grid stats-grid-compact">
+          <StatCard
+            label="Contas conectadas"
+            value={`${usage?.accounts_used ?? accounts.length}`}
+            hint={
+              usage?.accounts_limit
+                ? `de ${usage.accounts_limit} no plano ${usage.plan}`
+                : `plano ${usage?.plan ?? "—"}`
+            }
+            icon={Users}
+            accent="teal"
+          />
+          <StatCard
+            label="Jobs hoje"
+            value={usage?.jobs_today_used ?? 0}
+            hint={
+              usage?.jobs_today_limit
+                ? `de ${usage.jobs_today_limit}`
+                : "sem limite diário"
+            }
+            icon={ListTodo}
+            accent="amber"
+          />
+        </div>
+        {jobs.length > 0 && (
+          <ul className="compact-list">
+            {jobs.slice(0, 4).map((job) => (
+              <li key={job.id}>
+                <span>{jobTypeLabel(job.type)}</span>
+                <span className={`status status-${job.status}`}>
+                  {jobStatusLabel(job.status)}
+                </span>
+                <small>{relativeTime(job.created_at)}</small>
+              </li>
             ))}
-          </div>
-        </section>
-      )}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }

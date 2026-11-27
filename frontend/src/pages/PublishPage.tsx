@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  CalendarClock,
   CheckCircle2,
   FileImage,
   Send,
@@ -10,6 +11,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ChangeEvent,
   type FormEvent,
@@ -22,8 +24,10 @@ import type { Account, Job } from "../types";
 import {
   formatBytes,
   isVideoContentType,
+  idempotencyKeyFor,
   jobStatusLabel,
   jobTypeLabel,
+  type IdempotencyState,
 } from "../utils";
 
 const TYPES = [
@@ -45,6 +49,7 @@ export function PublishPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [thumbnail, setThumbnail] = useState<File | null>(null);
   const [caption, setCaption] = useState("");
+  const [scheduledAt, setScheduledAt] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<Job | null>(null);
@@ -54,6 +59,23 @@ export function PublishPage() {
     [type],
   );
   const needsThumbnail = type === "publish.video" || type === "publish.reel";
+
+  // A chave acompanha o rascunho: ela sobrevive a uma falha de envio (retry
+  // seguro) e muda se qualquer conteúdo da publicação for alterado.
+  const draftFingerprint = [
+    accountId,
+    type,
+    caption,
+    scheduledAt,
+    files.map((file) => `${file.name}:${file.size}:${file.lastModified}`).join(","),
+    thumbnail ? `${thumbnail.name}:${thumbnail.size}:${thumbnail.lastModified}` : "",
+  ].join("|");
+  const idempotencyRef = useRef<IdempotencyState | null>(null);
+  idempotencyRef.current = idempotencyKeyFor(
+    idempotencyRef.current,
+    draftFingerprint,
+  );
+  const idempotencyKey = idempotencyRef.current.key;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -107,6 +129,9 @@ export function PublishPage() {
     if (type === "publish.story" && files.length === 0) {
       return "Selecione a mídia do story.";
     }
+    if (scheduledAt && new Date(scheduledAt).getTime() <= Date.now()) {
+      return "Escolha uma data e hora no futuro.";
+    }
     return null;
   }
 
@@ -153,12 +178,19 @@ export function PublishPage() {
       const created = await api.createJob(accountId, {
         type,
         payload,
-        idempotency_key: crypto.randomUUID(),
+        idempotency_key: idempotencyKey,
+        ...(scheduledAt
+          ? { run_after: new Date(scheduledAt).toISOString() }
+          : {}),
       });
       setJob(created);
       setFiles([]);
       setThumbnail(null);
-      notify("Publicação enfileirada.", "success");
+      setScheduledAt("");
+      notify(
+        scheduledAt ? "Publicação agendada." : "Publicação iniciada.",
+        "success",
+      );
     } catch (err) {
       setError(
         err instanceof ApiError
@@ -178,7 +210,7 @@ export function PublishPage() {
         <PageHeader
           eyebrow="Conteúdo"
           title="Publicar"
-          description="Envie mídia e enfileire a publicação em uma conta."
+          description="Escolha a conta, envie a mídia e acompanhe a publicação."
         />
         <EmptyState
           icon={Send}
@@ -199,7 +231,7 @@ export function PublishPage() {
       <PageHeader
         eyebrow="Conteúdo"
         title="Publicar"
-        description="O upload é local; o job usa a sessão da conta e protege contra post duplicado."
+        description="Envie o arquivo, escolha a conta e acompanhe a publicação daqui."
       />
 
       <div className="publish-layout">
@@ -314,6 +346,18 @@ export function PublishPage() {
             <small>{caption.length}/2200</small>
           </label>
 
+          <label className="field">
+            <span>
+              <CalendarClock size={14} /> Agendar para (opcional)
+            </span>
+            <input
+              type="datetime-local"
+              value={scheduledAt}
+              onChange={(event) => setScheduledAt(event.target.value)}
+            />
+            <small>Deixe em branco para publicar assim que o worker pegar o job.</small>
+          </label>
+
           {error && <div className="form-error">{error}</div>}
 
           <button
@@ -324,7 +368,7 @@ export function PublishPage() {
             {submitting ? (
               <>
                 <UploadCloud size={16} className="bounce" />
-                Enviando e enfileirando…
+                Enviando…
               </>
             ) : (
               <>
@@ -337,9 +381,8 @@ export function PublishPage() {
           <div className="info-note">
             <AlertTriangle size={16} />
             <span>
-              Se o Instagram não confirmar a publicação, o job fica com{" "}
-              <code>ambiguous_publish</code> e não repete sozinho. Confira o
-              perfil antes de tentar novamente.
+              Se o Instagram não confirmar a publicação, ela não será repetida
+              automaticamente. Confira o perfil antes de tentar de novo.
             </span>
           </div>
         </form>
@@ -349,21 +392,21 @@ export function PublishPage() {
             <div className="panel-header">
               <div>
                 <h2>Como funciona</h2>
-                <p>O fluxo é assíncrono de ponta a ponta.</p>
+                <p>Você acompanha cada etapa por aqui.</p>
               </div>
             </div>
             <ol className="steps">
               <li>
-                <strong>Upload</strong>
-                <p>O arquivo vai para o storage local compartilhado.</p>
+                <strong>Envio</strong>
+                <p>O arquivo é guardado com segurança.</p>
               </li>
               <li>
-                <strong>Fila</strong>
-                <p>O job é serializado por conta e executado pelo worker.</p>
+                <strong>Processamento</strong>
+                <p>A publicação é feita por vez, sem conflito entre contas.</p>
               </li>
               <li>
                 <strong>Confirmação</strong>
-                <p>O resultado fica no job, com proteção contra duplicidade.</p>
+                <p>Você vê o resultado aqui, sem risco de post duplicado.</p>
               </li>
             </ol>
           </div>
@@ -372,7 +415,7 @@ export function PublishPage() {
             <div className="panel job-result-card">
               <div className="panel-header">
                 <div>
-                  <h2>Job criado</h2>
+                  <h2>Publicação iniciada</h2>
                   <p>{jobTypeLabel(job.type)}</p>
                 </div>
                 {job.status === "succeeded" ? (
@@ -386,8 +429,8 @@ export function PublishPage() {
               <code className="job-id-full">{job.id}</code>
               {job.error_code && (
                 <div className="job-error">
-                  <strong>{job.error_code}</strong>
-                  <span>{job.error_message}</span>
+                  <strong>Falha na publicação</strong>
+                  <span title={job.error_code}>{job.error_message}</span>
                 </div>
               )}
               {job.result && (
@@ -396,7 +439,7 @@ export function PublishPage() {
                 </pre>
               )}
               <Link to="/jobs" className="button button-ghost button-block">
-                Acompanhar na fila
+                Acompanhar publicação
               </Link>
             </div>
           )}

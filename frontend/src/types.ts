@@ -181,3 +181,78 @@ export interface ApiKey {
 export interface ApiKeyCreated extends ApiKey {
   key: string;
 }
+
+export type FlowNodeType =
+  | "trigger.manual"
+  | "condition.keyword"
+  | "action.reply_dm"
+  | "action.reply_comment"
+  | "action.publish"
+  | "action.schedule_publish";
+
+export interface FlowNode {
+  id: string;
+  type: FlowNodeType;
+  config: Record<string, unknown>;
+  position?: { x: number; y: number };
+}
+
+export interface FlowEdge {
+  id: string;
+  source: string;
+  target: string;
+  source_handle?: string | null;
+}
+
+export interface FlowGraph {
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+}
+
+export interface Flow {
+  id: string;
+  name: string;
+  description: string | null;
+  category: string;
+  enabled: boolean;
+  graph: FlowGraph;
+  trigger_source: "manual" | "dm" | "comment";
+  account_id: string | null;
+  poll_interval_seconds: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FlowSummary {
+  total_flows: number;
+  active_flows: number;
+  paused_flows: number;
+  draft_flows: number;
+  total_runs: number;
+  succeeded_runs: number;
+  success_rate: number;
+  recent_runs: FlowRun[];
+  top_flows: Array<{ flow_id: string; name: string; runs: number }>;
+  activity: Array<{ date: string; runs: number }>;
+}
+
+export interface FlowRunStep {
+  node_id: string;
+  type: string;
+  status: string;
+  detail: Record<string, unknown>;
+  handle?: string;
+}
+
+export interface FlowRun {
+  id: string;
+  flow_id: string;
+  status: string;
+  trigger: string;
+  context: Record<string, unknown>;
+  steps: FlowRunStep[];
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  finished_at: string | null;
+}

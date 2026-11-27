@@ -4,13 +4,16 @@ import { useAuth } from "./auth";
 import { Layout } from "./components/Layout";
 import { AccountDetailPage } from "./pages/AccountDetailPage";
 import { AccountsPage } from "./pages/AccountsPage";
+import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { AuditPage } from "./pages/AuditPage";
+import { AutomationsPage } from "./pages/AutomationsPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { FlowsPage } from "./pages/FlowsPage";
+import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { JobsPage } from "./pages/JobsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { PublishPage } from "./pages/PublishPage";
 import { SettingsPage } from "./pages/SettingsPage";
-import { WebhooksPage } from "./pages/WebhooksPage";
 
 export function App() {
   const { me, loading } = useAuth();
@@ -31,15 +34,19 @@ export function App() {
   return (
     <Layout>
       <Routes>
-        <Route path="/" element={<DashboardPage />} />
+        <Route path="/" element={<Navigate to="/flows" replace />} />
+        <Route path="/flows" element={<FlowsPage />} />
+        <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/automations" element={<AutomationsPage />} />
+        <Route path="/analytics" element={<AnalyticsPage />} />
+        <Route path="/integrations" element={<IntegrationsPage />} />
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/accounts/:id" element={<AccountDetailPage />} />
         <Route path="/jobs" element={<JobsPage />} />
         <Route path="/publish" element={<PublishPage />} />
-        <Route path="/webhooks" element={<WebhooksPage />} />
         <Route path="/audit" element={<AuditPage />} />
         <Route path="/settings" element={<SettingsPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to="/flows" replace />} />
       </Routes>
     </Layout>
   );

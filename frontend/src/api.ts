@@ -4,6 +4,10 @@ import type {
   ApiKey,
   ApiKeyCreated,
   AuditLogPage,
+  Flow,
+  FlowGraph,
+  FlowRun,
+  FlowSummary,
   InsightsSnapshot,
   Job,
   JobPage,
@@ -281,6 +285,7 @@ export const api = {
       payload?: Record<string, unknown>;
       priority?: number;
       idempotency_key?: string;
+      run_after?: string;
     },
   ) {
     return request<Job>(`/v1/accounts/${accountId}/jobs`, {
@@ -332,6 +337,57 @@ export const api = {
   } = {}) {
     return request<AuditLogPage>(`/v1/audit-logs${query(params)}`);
   },
+
+  flows: () => request<Flow[]>("/v1/flows"),
+
+  flowsSummary: () => request<FlowSummary>("/v1/flows/summary"),
+
+  createFlow(input: {
+    name: string;
+    description?: string | null;
+    category?: string;
+    graph: FlowGraph;
+    enabled?: boolean;
+    trigger_source?: "manual" | "dm" | "comment";
+    account_id?: string | null;
+    poll_interval_seconds?: number;
+  }) {
+    return request<Flow>("/v1/flows", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  updateFlow(
+    id: string,
+    input: {
+      name?: string;
+      description?: string | null;
+      category?: string;
+      graph?: FlowGraph;
+      enabled?: boolean;
+      trigger_source?: "manual" | "dm" | "comment";
+      account_id?: string | null;
+      poll_interval_seconds?: number;
+    },
+  ) {
+    return request<Flow>(`/v1/flows/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
+  },
+
+  deleteFlow: (id: string) =>
+    request<void>(`/v1/flows/${id}`, { method: "DELETE" }),
+
+  runFlow: (id: string, input: { trigger?: string; context: Record<string, unknown> }) =>
+    request<FlowRun>(`/v1/flows/${id}/run`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  flowRuns: (id: string, limit = 50) =>
+    request<FlowRun[]>(`/v1/flows/${id}/runs?limit=${limit}`),
 
   apiKeys: () => request<ApiKey[]>("/v1/api-keys"),
 
