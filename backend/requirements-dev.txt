@@ -1,3 +1,6 @@
 -r requirements.txt
 pytest>=8.3,<9
 httpx>=0.27,<1
+# Starlette 1 usa este cliente no TestClient. Mantemos httpx acima para
+# compatibilidade com versões anteriores do framework.
+httpx2>=2.16,<3
