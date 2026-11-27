@@ -11,8 +11,10 @@ from app.core.time import utcnow
 from app.db.models import WebhookDelivery
 from app.services.ig_gateway import IgAuthError
 from app.services.webhooks import (
+    HttpWebhookNotifier,
     WebhookSendError,
     WebhookService,
+    resolve_webhook_target,
     sign_payload,
     validate_webhook_url,
 )
@@ -84,6 +86,83 @@ def test_webhook_send_validation_blocks_private_resolution(monkeypatch):
     with pytest.raises(AppError) as exc:
         validate_webhook_url("https://example.com/hook", resolve=True)
     assert exc.value.code == "invalid_webhook_url"
+
+
+def test_webhook_url_rejects_invalid_port_and_mapped_private_ip():
+    with pytest.raises(AppError) as bad_port:
+        validate_webhook_url("https://example.com:99999/hook")
+    assert bad_port.value.code == "invalid_webhook_url"
+
+    with pytest.raises(AppError) as mapped:
+        validate_webhook_url("http://[::ffff:127.0.0.1]/hook")
+    assert mapped.value.code == "invalid_webhook_url"
+
+
+def test_webhook_target_keeps_original_host_and_resolves_once(monkeypatch):
+    def fake_getaddrinfo(host, port, *_args, **_kwargs):
+        assert (host, port) == ("example.com", 8443)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+    monkeypatch.setattr("app.services.webhooks.socket.getaddrinfo", fake_getaddrinfo)
+    target = resolve_webhook_target("https://example.com:8443/hook?a=1")
+    assert target.host == "example.com"
+    assert target.port == 8443
+    assert target.path == "/hook?a=1"
+    assert target.ip == "93.184.216.34"
+
+
+def test_notifier_pins_validated_ip_against_dns_rebinding(monkeypatch):
+    """A conexão usa o IP validado; uma segunda resolução não é consultada."""
+    resolutions: list[tuple[str, int]] = []
+
+    def fake_getaddrinfo(host, port, *_args, **_kwargs):
+        resolutions.append((host, port))
+        # Primeira resolução pública; um rebinding apontaria para 10.0.0.5.
+        address = "93.184.216.34" if len(resolutions) == 1 else "10.0.0.5"
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port))]
+
+    connected: list[tuple[str, int]] = []
+
+    def fake_connect(address, port, _timeout):
+        connected.append((address, port))
+        raise ConnectionRefusedError("fim do teste")
+
+    monkeypatch.setattr("app.services.webhooks.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("app.services.webhooks._connect_pinned", fake_connect)
+
+    with pytest.raises(WebhookSendError) as exc:
+        HttpWebhookNotifier().send("http://example.com/hook", b"{}", {}, 1.0)
+
+    assert exc.value.code == "webhook_send_error"
+    assert len(resolutions) == 1
+    assert connected == [("93.184.216.34", 80)]
+
+
+def test_pinned_https_keeps_sni_and_pins_ip(monkeypatch):
+    from app.services import webhooks
+
+    connected: list[tuple[str, int]] = []
+
+    def fake_connect(address, port, _timeout):
+        connected.append((address, port))
+        return object()
+
+    wrapped: dict[str, str] = {}
+
+    class FakeContext:
+        def wrap_socket(self, sock, *, server_hostname):
+            wrapped["server_hostname"] = server_hostname
+            return sock
+
+    monkeypatch.setattr(webhooks, "_connect_pinned", fake_connect)
+    connection = webhooks._PinnedHTTPSConnection(
+        "example.com", 443, resolved_ip="93.184.216.34", timeout=1.0
+    )
+    connection._context = FakeContext()
+    connection.connect()
+
+    assert connected == [("93.184.216.34", 443)]
+    assert wrapped["server_hostname"] == "example.com"
 
 
 def test_job_event_is_delivered_with_hmac(client, worker, session_factory, ig_gateway):

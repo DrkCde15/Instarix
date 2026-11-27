@@ -49,7 +49,10 @@ def _validate_proxy(proxy: str, *, allow_private: bool) -> str:
     parts = urlsplit(proxy)
     if parts.scheme not in {"http", "https"} or not parts.hostname:
         raise AppError(422, "invalid_proxy", "proxy deve ser uma URL http(s) com host.")
-    port = parts.port or (443 if parts.scheme == "https" else 80)
+    try:
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+    except ValueError as exc:
+        raise AppError(422, "invalid_proxy", "porta inválida no proxy.") from exc
     if not _proxy_host_allowed(parts.hostname.lower(), port, allow_private=allow_private):
         raise AppError(422, "invalid_proxy", "proxy aponta para um host não permitido.")
     return proxy
